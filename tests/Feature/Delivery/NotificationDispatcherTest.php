@@ -7,6 +7,7 @@ use App\Enums\Priority;
 use App\Jobs\SendNotification;
 use App\Models\Notification;
 use App\Services\Delivery\NotificationDispatcher;
+use Illuminate\Contracts\Queue\Factory;
 use Illuminate\Support\Facades\Queue;
 
 beforeEach(fn () => Queue::fake());
@@ -52,4 +53,38 @@ it('accepts IDs and handles large sets in chunks', function (): void {
 
     expect(app(NotificationDispatcher::class)->dispatch($ids))->toBe(1200);
     Queue::assertPushed(SendNotification::class, 1200);
+});
+
+it('puts notifications back to pending when the queue is unavailable', function (): void {
+    $notification = Notification::factory()->create();
+
+    $failingQueue = Mockery::mock(Illuminate\Contracts\Queue\Queue::class);
+    $failingQueue->allows('bulk')->andThrow(new RuntimeException('Connection refused'));
+    $factory = Mockery::mock(Factory::class);
+    $factory->allows('connection')->andReturn($failingQueue);
+
+    $count = (new NotificationDispatcher($factory))->dispatch([$notification]);
+
+    expect($count)->toBe(0)
+        ->and($notification->refresh()->status)->toBe(NotificationStatus::Pending)
+        ->and($notification->queued_at)->toBeNull();
+});
+
+it('still accepts the API request when the queue is down', function (): void {
+    $failingQueue = Mockery::mock(Illuminate\Contracts\Queue\Queue::class);
+    $failingQueue->allows('bulk')->andThrow(new RuntimeException('Connection refused'));
+    $factory = Mockery::mock(Factory::class);
+    $factory->allows('connection')->andReturn($failingQueue);
+    $this->app->instance(NotificationDispatcher::class, new NotificationDispatcher($factory));
+
+    $this->postJson('/api/v1/notifications', ['channel' => 'sms', 'recipient' => '+905551234567', 'content' => 'Hi'])
+        ->assertAccepted()
+        ->assertJsonPath('data.status', 'pending');
+
+    // The recovery sweeper picks it up once the queue is back.
+    Notification::query()->update(['updated_at' => now()->subMinutes(2)]);
+    $this->app->forgetInstance(NotificationDispatcher::class);
+    $this->artisan('notifications:recover')->assertSuccessful();
+
+    expect(Notification::query()->sole()->status)->toBe(NotificationStatus::Queued);
 });

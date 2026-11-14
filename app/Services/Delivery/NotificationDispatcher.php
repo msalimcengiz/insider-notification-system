@@ -11,13 +11,16 @@ use App\Jobs\SendNotification;
 use App\Models\Notification;
 use Illuminate\Contracts\Queue\Factory as Queue;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
  * Hands notifications to the queues.
  *
  * The status is flipped to `queued` (conditionally) before the job is pushed.
- * If the process dies in between, the notification is left `queued` without
- * a job and the recovery sweeper re-dispatches it. Pushing first would let a
+ * If pushing fails, the rows go back to `pending`; if the process dies in
+ * between, a row is left `queued` without a job. Either way the recovery
+ * sweeper re-dispatches it. Pushing first would let a
  * worker see a notification that is not claimable yet and drop the job.
  */
 final readonly class NotificationDispatcher
@@ -87,10 +90,41 @@ final readonly class NotificationDispatcher
             $byQueue[$queueName][] = new SendNotification($row->id, $channel);
         }
 
+        $pushed = 0;
+
         foreach ($byQueue as $queueName => $jobs) {
-            $this->queue->connection()->bulk($jobs, '', $queueName);
+            try {
+                $this->queue->connection()->bulk($jobs, '', $queueName);
+                $pushed += count($jobs);
+            } catch (Throwable $e) {
+                $this->revertToPending($jobs, $e);
+            }
         }
 
-        return count($rows);
+        return $pushed;
+    }
+
+    /**
+     * The queue is unavailable (e.g. Redis is down). The rows are already
+     * persisted, so instead of failing the API request they go back to
+     * `pending`: the recovery sweeper re-dispatches pending rows after a
+     * minute, while a row left `queued` without a job would wait for the much
+     * longer queued threshold.
+     *
+     * @param  list<SendNotification>  $jobs
+     */
+    private function revertToPending(array $jobs, Throwable $e): void
+    {
+        $ids = array_map(fn (SendNotification $job): string => $job->notificationId, $jobs);
+
+        Notification::query()
+            ->whereKey($ids)
+            ->where('status', NotificationStatus::Queued)
+            ->update(['status' => NotificationStatus::Pending, 'queued_at' => null, 'updated_at' => now()]);
+
+        Log::error('notifications.dispatch_failed', [
+            'count' => count($ids),
+            'error' => $e->getMessage(),
+        ]);
     }
 }
