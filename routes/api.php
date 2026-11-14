@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\V1\HealthController;
+use App\Http\Controllers\Api\V1\MetricsController;
 use App\Http\Controllers\Api\V1\NotificationBatchController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use Illuminate\Support\Facades\Route;
@@ -18,6 +20,9 @@ Route::prefix('v1')->group(function (): void {
     Route::get('notifications/{notification}', [NotificationController::class, 'show']);
     Route::post('notifications/{notification}/cancel', [NotificationController::class, 'cancel']);
     Route::post('notifications/{notification}/retry', [NotificationController::class, 'retry']);
+
+    Route::get('metrics', MetricsController::class);
+    Route::get('health', HealthController::class);
 
     Route::get('batches/{batch}', [NotificationBatchController::class, 'show']);
     Route::post('batches/{batch}/cancel', [NotificationBatchController::class, 'cancel']);
