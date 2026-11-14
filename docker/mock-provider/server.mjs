@@ -42,15 +42,25 @@ function channelStats(channel) {
     });
 }
 
-function track(channel, outcome) {
+// Rate is measured on arrival (before the simulated latency), which is what
+// a provider's own rate limiter would see.
+function arrived(channel, now) {
     const s = channelStats(channel);
-    const now = Date.now();
 
     s.requests++;
-    s[outcome]++;
     s.window.push(now);
-    while (s.window.length && s.window[0] <= now - 1000) s.window.shift();
+    // Arrivals are not strictly ordered (bodies finish at different times):
+    // keep the window sorted before counting.
+    for (let i = s.window.length - 1; i > 0 && s.window[i] < s.window[i - 1]; i--) {
+        [s.window[i], s.window[i - 1]] = [s.window[i - 1], s.window[i]];
+    }
+    const latest = s.window[s.window.length - 1];
+    while (s.window.length && s.window[0] <= latest - 1000) s.window.shift();
     s.maxPerSecond = Math.max(s.maxPerSecond, s.window.length);
+}
+
+function track(channel, outcome) {
+    channelStats(channel)[outcome]++;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -82,6 +92,8 @@ function forcedOutcome(content) {
 }
 
 const server = createServer(async (req, res) => {
+    // Timestamp first, before the body is read or the event loop yields.
+    const arrivedAt = performance.timeOrigin + performance.now();
     if (req.method === 'GET' && req.url === '/stats') {
         const channels = Object.fromEntries(
             Object.entries(stats.channels).map(([name, { window, ...rest }]) => [name, rest]),
@@ -105,6 +117,7 @@ const server = createServer(async (req, res) => {
 
     const body = await readJson(req);
     const channel = typeof body?.channel === 'string' ? body.channel : 'unknown';
+    arrived(channel, arrivedAt);
 
     if (!body || !body.to || !body.channel || !body.content) {
         track(channel, 'failed');

@@ -24,6 +24,7 @@ final readonly class ThrottleChannel
         private SlidingWindowRateLimiter $limiter,
         private int $perSecond,
         private int $maxWaitMs,
+        private int $windowMs = 1000,
     ) {}
 
     public static function fromConfig(): self
@@ -32,6 +33,7 @@ final readonly class ThrottleChannel
             app(SlidingWindowRateLimiter::class),
             (int) config('notifications.rate_limit.per_second'),
             (int) config('notifications.rate_limit.max_wait_ms'),
+            (int) config('notifications.rate_limit.window_ms', 1000),
         );
     }
 
@@ -39,7 +41,7 @@ final readonly class ThrottleChannel
     {
         $waited = 0;
 
-        while (($waitMs = $this->limiter->attempt("channel:{$job->channel->value}", $this->perSecond)) > 0) {
+        while (($waitMs = $this->limiter->attempt("channel:{$job->channel->value}", $this->perSecond, $this->windowMs)) > 0) {
             if ($waited + $waitMs > $this->maxWaitMs) {
                 $job->release(1);
 

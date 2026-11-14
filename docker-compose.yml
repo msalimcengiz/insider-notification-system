@@ -96,6 +96,18 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Load test (not started by `docker compose up`):
+  #   docker compose --profile loadtest run --rm k6
+  k6:
+    image: grafana/k6:0.57.0
+    profiles: ["loadtest"]
+    command: ["run", "/scripts/load-test.js"]
+    volumes:
+      - ./tests/k6:/scripts:ro
+    depends_on:
+      - nginx
+      - mock-provider
+
   postgres:
     image: postgres:16-alpine
     environment:

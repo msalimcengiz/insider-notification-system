@@ -79,6 +79,12 @@ return [
 
     'rate_limit' => [
         'per_second' => (int) env('NOTIFICATIONS_RATE_LIMIT_PER_SECOND', 100),
+        // The guarantee holds when calls leave the worker. Measured where
+        // they *arrive*, transport jitter can push a window slightly over the
+        // limit (the load test saw up to 109/s on a CPU-starved host). For a
+        // provider that enforces the limit strictly on arrival, add headroom:
+        // e.g. 1100 means 100 calls per 1.1 s.
+        'window_ms' => (int) env('NOTIFICATIONS_RATE_LIMIT_WINDOW_MS', 1000),
         'max_wait_ms' => (int) env('NOTIFICATIONS_RATE_LIMIT_MAX_WAIT_MS', 2000),
     ],
 
