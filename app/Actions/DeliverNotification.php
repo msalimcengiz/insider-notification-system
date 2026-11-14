@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace App\Actions;
 
 use App\Enums\NotificationStatus;
+use App\Http\Middleware\AssignCorrelationId;
 use App\Models\Notification;
 use App\Models\NotificationAttempt;
 use App\Services\CircuitBreaker\CircuitBreaker;
 use App\Services\Delivery\DeliveryResult;
 use App\Services\Delivery\ProviderRegistry;
 use App\Services\Delivery\RetryPolicy;
+use App\Services\Metrics\MetricsRecorder;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -23,6 +26,7 @@ final readonly class DeliverNotification
         private ProviderRegistry $providers,
         private RetryPolicy $retryPolicy,
         private CircuitBreaker $circuitBreaker,
+        private MetricsRecorder $metrics,
     ) {}
 
     /**
@@ -34,6 +38,13 @@ final readonly class DeliverNotification
 
         if ($notification === null) {
             return null;
+        }
+
+        // Logs written from here on carry the notification's own correlation
+        // ID (Context is restored per job), whatever dispatched the job.
+        Context::add('notification_id', $notification->id);
+        if ($notification->correlation_id !== null) {
+            Context::add(AssignCorrelationId::CONTEXT_KEY, $notification->correlation_id);
         }
 
         $result = $this->providers->for($notification->channel)->send($notification);
@@ -122,6 +133,14 @@ final readonly class DeliverNotification
 
             $notification->update($changes);
         });
+
+        $this->metrics->recordAttempt(
+            $notification->channel,
+            $result->outcome,
+            $result->durationMs,
+            $notification->status,
+            $result->succeeded() ? (int) $notification->created_at->diffInMilliseconds($now, true) : null,
+        );
 
         Log::log($result->succeeded() ? 'info' : 'warning', 'notification.attempt', [
             'notification_id' => $notification->id,
