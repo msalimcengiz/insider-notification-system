@@ -93,9 +93,13 @@ return [
         'enabled' => env('SCRAMBLE_DEV_TOOLS', env('APP_DEBUG', false)),
     ],
 
-    'renderer' => 'elements',
+    // Swagger UI (swagger.io), bundled locally: resources/views/docs/swagger.blade.php
+    'renderer' => 'swagger',
 
     'renderers' => [
+        'swagger' => [
+            'view' => 'docs.swagger',
+        ],
         /*
          * Stoplight Elements config options: https://docs.stoplight.io/docs/elements/b074dc47b2826-elements-configuration-options
          */

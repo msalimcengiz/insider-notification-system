@@ -55,7 +55,7 @@ That one command builds the image, installs dependencies, creates `.env`, runs m
 | **Bonus:** WebSocket updates | Laravel Reverb: `notifications.{id}` / `batches.{id}` channels, demo page |
 | **Bonus:** CI/CD | GitHub Actions: Pint, Larastan level 8, tests, OpenAPI drift check, image published to GHCR |
 | **Bonus:** distributed tracing | OpenTelemetry → Jaeger: one trace per notification across API, queue, worker and provider call (HTTP, SQL, send/process, provider client spans; W3C `traceparent` propagated through jobs and to the provider) |
-| Deliverables | Docker Compose, OpenAPI spec ([`openapi.json`](openapi.json) and `/docs/api`), versioned migrations, single-command test suite |
+| Deliverables | Docker Compose, Swagger/OpenAPI: the OpenAPI 3.1 spec ([`openapi.json`](openapi.json)) and Swagger UI at `/docs/api`, versioned migrations, single-command test suite |
 
 ---
 
@@ -514,7 +514,7 @@ Four workers per channel are plenty for webhook.site. With the local mock's ~50 
 ## Testing
 
 ```bash
-docker-compose exec app php artisan test          # 278 tests, ~15 s
+docker-compose exec app php artisan test          # 280 tests, ~15 s
 docker-compose exec app composer lint             # Pint (check) + Larastan level 8
 docker-compose exec app composer docs             # regenerate openapi.json
 ```
