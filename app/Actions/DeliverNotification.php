@@ -17,6 +17,7 @@ use App\Services\Metrics\MetricsRecorder;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use OpenTelemetry\API\Trace\Span;
 
 /**
  * One delivery attempt: claim → call provider → record the outcome.
@@ -144,6 +145,12 @@ final readonly class DeliverNotification
             $notification->status,
             $result->succeeded() ? (int) $notification->created_at->diffInMilliseconds($now, true) : null,
         );
+
+        Span::getCurrent()->setAttributes(array_filter([
+            'notification.attempt' => $attempt,
+            'notification.status' => $notification->status->value,
+            'notification.retry_in_seconds' => $retryIn,
+        ], fn (mixed $value): bool => $value !== null));
 
         Log::log($result->succeeded() ? 'info' : 'warning', 'notification.attempt', [
             'notification_id' => $notification->id,

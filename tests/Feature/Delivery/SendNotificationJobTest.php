@@ -7,6 +7,7 @@ use App\Enums\NotificationStatus;
 use App\Jobs\Middleware\CheckCircuitBreaker;
 use App\Jobs\Middleware\SkipUnclaimable;
 use App\Jobs\Middleware\ThrottleChannel;
+use App\Jobs\Middleware\TraceJob;
 use App\Jobs\SendNotification;
 use App\Models\Notification;
 use App\Services\Delivery\RetryPolicy;
@@ -48,14 +49,15 @@ it('runs through the queue end to end', function (): void {
     expect($notification->refresh()->status)->toBe(NotificationStatus::Sent);
 });
 
-it('skips unclaimable jobs, then checks the circuit and the rate limit, never using the queue retry counter', function (): void {
+it('traces, skips unclaimable jobs, then checks the circuit and the rate limit, never using the queue retry counter', function (): void {
     $job = new SendNotification('id', Channel::Sms);
     $middleware = $job->middleware();
 
-    expect($middleware)->toHaveCount(3)
-        ->and($middleware[0])->toBeInstanceOf(SkipUnclaimable::class)
-        ->and($middleware[1])->toBeInstanceOf(CheckCircuitBreaker::class)
-        ->and($middleware[2])->toBeInstanceOf(ThrottleChannel::class)
+    expect($middleware)->toHaveCount(4)
+        ->and($middleware[0])->toBeInstanceOf(TraceJob::class)
+        ->and($middleware[1])->toBeInstanceOf(SkipUnclaimable::class)
+        ->and($middleware[2])->toBeInstanceOf(CheckCircuitBreaker::class)
+        ->and($middleware[3])->toBeInstanceOf(ThrottleChannel::class)
         ->and($job->tries)->toBe(0)
         ->and($job->retryUntil()->isFuture())->toBeTrue();
 });

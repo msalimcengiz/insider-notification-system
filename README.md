@@ -53,7 +53,7 @@ That one command builds the image, installs dependencies, creates `.env`, runs m
 | **Bonus:** templates | `/api/v1/templates` CRUD and preview, `{{ variable }}` substitution |
 | **Bonus:** WebSocket updates | Laravel Reverb: `notifications.{id}` / `batches.{id}` channels, demo page |
 | **Bonus:** CI/CD | GitHub Actions: Pint, Larastan level 8, tests, OpenAPI drift check, image published to GHCR |
-| **Bonus:** distributed tracing | Not implemented; correlation IDs cover request → worker → provider. See [next steps](#trade-offs-and-next-steps) |
+| **Bonus:** distributed tracing | OpenTelemetry → Jaeger: one trace per notification across API, queue, worker and provider call (HTTP, SQL, send/process, provider client spans; W3C `traceparent` propagated through jobs and to the provider) |
 | Deliverables | Docker Compose, OpenAPI spec ([`openapi.json`](openapi.json) and `/docs/api`), versioned migrations, single-command test suite |
 
 ---
@@ -77,6 +77,7 @@ docker-compose up        # first boot takes a minute: composer install + migrati
 | Horizon (queues dashboard) | http://localhost:8000/horizon |
 | WebSocket demo | http://localhost:8000/ws-demo.html |
 | WebSocket server (Reverb) | ws://localhost:8080 |
+| Traces (Jaeger UI) | http://localhost:16686 |
 | Provider (webhook.site) | https://webhook.site/#!/view/d578e70a-82cf-4fb9-9762-938e0c61d818 |
 
 Seed a few ready-to-use templates:
@@ -441,7 +442,43 @@ The default limit is 10 segments. Push is limited to 1000 characters, email to 1
 
 ### 12. Provider contract
 
-The request body is exactly the documented `{"to", "channel", "content"}`. Tracing data travels in headers (`X-Correlation-ID`, `Idempotency-Key`), so the contract is unchanged. As a consequence, an email **subject** is stored and returned by the API but not sent to the provider. A real email provider adapter would map it. The [`ChannelProvider`](app/Services/Delivery/ChannelProvider.php) interface (one implementation per channel, resolved by [`ProviderRegistry`](app/Services/Delivery/ProviderRegistry.php)) is where Twilio / SES / FCM adapters would plug in.
+The request body is exactly the documented `{"to", "channel", "content"}`. Tracing data travels in headers (`X-Correlation-ID`, `traceparent`, `Idempotency-Key`), so the contract is unchanged. As a consequence, an email **subject** is stored and returned by the API but not sent to the provider. A real email provider adapter would map it. The [`ChannelProvider`](app/Services/Delivery/ChannelProvider.php) interface (one implementation per channel, resolved by [`ProviderRegistry`](app/Services/Delivery/ProviderRegistry.php)) is where Twilio / SES / FCM adapters would plug in.
+
+### 13. Distributed tracing with OpenTelemetry
+
+Every notification produces **one trace** that follows it across processes. The trace is exported over OTLP to **Jaeger** (http://localhost:16686). Every API response carries an `X-Trace-Id` header, so you can paste it into Jaeger's search to open that request's trace.
+
+A real trace of `POST /api/v1/notifications` delivered to webhook.site (2 services, 15 spans):
+
+```
+notification-api     POST /api/v1/notifications                  99 ms   http.route, status 202, correlation.id
+notification-api       INSERT notifications                        2 ms
+notification-api       UPDATE notifications                        1 ms   (dispatcher: pending → queued … RETURNING)
+notification-api       send notifications-sms-high                13 ms   producer, messaging.destination.name
+notification-worker      process notifications-sms-high          306 ms   consumer, notification.id/channel/attempt/status
+notification-worker        UPDATE notifications                    2 ms   (atomic claim)
+notification-worker        POST webhook.site                     244 ms   client, status 202, provider.message_id
+notification-worker        INSERT notification_attempts            1 ms
+notification-worker        UPDATE notifications                    0 ms   (sent)
+```
+
+How the trace stays connected:
+- **HTTP → queue.** A middleware opens the server span. It continues the caller's trace when the request has a `traceparent` header. The dispatcher opens one producer span per queue it pushes to.
+- **Queue → worker.** Each job stores the W3C trace context of that producer span when it is created. The `TraceJob` middleware runs first on the worker and opens the consumer span with that context as its parent.
+- **Inside the consumer span.** Everything the worker does is recorded under it:
+  - SQL queries
+  - circuit breaker and rate limit events (`circuit.open`, `rate_limit.waited`)
+  - the provider call, which also sends `traceparent` so a tracing-aware provider could continue the trace
+- **Logs.** Log lines carry `trace_id` next to `correlation_id`.
+- **Scheduler.** Scheduler runs that dispatch something get their own root span, `notifications:dispatch-scheduled` or `notifications:recover`. Idle runs record nothing.
+
+Instrumentation choices:
+- **All spans are created explicitly** ([`Tracing`](app/Support/Tracing/Tracing.php), [`TraceHttpRequest`](app/Http/Middleware/TraceHttpRequest.php), [`TraceJob`](app/Jobs/Middleware/TraceJob.php), [`NotificationDispatcher`](app/Services/Delivery/NotificationDispatcher.php), [`WebhookChannelProvider`](app/Services/Delivery/WebhookChannelProvider.php)), and SQL spans come from `DB::listen`.
+- **Why not `opentelemetry-auto-laravel`:** the auto-instrumentation package (which needs the `opentelemetry` PHP extension) was tried first. With Horizon it produced no span for bulk pushes and none for job processing, kept one span open for a worker's whole lifetime, and its queue hook ended another span's scope, which broke requests. Explicit spans cover every hop, need no PHP extension, and are tested with an in-memory exporter.
+- **No personal data in spans:** SQL spans keep the statement but never the bindings.
+- **Sampling:** parent-based, with the ratio set by `OTEL_TRACES_SAMPLER_ARG`. The default is `1.0`; lower it under heavy load.
+- **Exporting:** spans are batched. Workers also flush at most every 2 s after a job, so a lone job's spans appear right away.
+- **Which processes trace:** only php-fpm (API requests), Horizon and the scheduler. Ad-hoc CLI commands such as `php artisan test` run without the SDK.
 
 ---
 
@@ -464,6 +501,9 @@ All settings are environment variables; defaults are in [`config/notifications.p
 | `NOTIFICATIONS_SMS_MAX_SEGMENTS` | `10` | SMS length limit |
 | `NOTIFICATIONS_MAX_SCHEDULE_DAYS` | `30` | How far ahead `scheduled_at` may be |
 | `NOTIFICATIONS_RECOVER_*` | see config | Age thresholds of the recovery sweeper |
+| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Share of new traces that are recorded (parent-based ratio) |
+| `OTEL_SDK_DISABLED` | `false` | Set to `true` to turn tracing off |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://jaeger:4318` | Where spans are sent (any OTLP backend: Jaeger, Tempo, Honeycomb…) |
 
 Four workers per channel are plenty for webhook.site. With the local mock's ~50 ms latency, each worker makes ~20 calls/s, so use 6-12 workers per channel to saturate the 100/s limit in a load test.
 
@@ -472,7 +512,7 @@ Four workers per channel are plenty for webhook.site. With the local mock's ~50 
 ## Testing
 
 ```bash
-docker-compose exec app php artisan test          # 258 tests, ~10 s
+docker-compose exec app php artisan test          # 269 tests, ~12 s
 docker-compose exec app composer lint             # Pint (check) + Larastan level 8
 docker-compose exec app composer docs             # regenerate openapi.json
 ```
@@ -560,7 +600,8 @@ app/
 │   ├── Notifications/       ContentValidator
 │   ├── RateLimiting/        SlidingWindowRateLimiter (Lua)
 │   └── Templates/           TemplateRenderer
-└── Support/Sms/             SmsSegmentCalculator (GSM-7 / UCS-2)
+├── Support/Sms/             SmsSegmentCalculator (GSM-7 / UCS-2)
+└── Support/Tracing/         Tracing (OpenTelemetry wrapper: spans, propagation, flushing)
 database/migrations/         versioned schema: CHECK constraints, partial indexes
 docker/                      php (dev + prod targets), nginx, postgres init, mock-provider
 tests/                       Unit, Feature (Api, Delivery, Commands, Observability), k6
@@ -571,7 +612,7 @@ tests/                       Unit, Feature (Api, Delivery, Commands, Observabili
 ## Trade-offs and next steps
 
 - **Authentication and tenancy:** the API is open, as in the assignment. Next would be API keys or OAuth clients with per-client rate limits and quotas, private WebSocket channels authorised in `routes/channels.php`, and Horizon/docs gates.
-- **Distributed tracing:** correlation IDs already join API, worker and provider logs. OpenTelemetry (auto-instrumented HTTP, DB and Redis spans exported to Jaeger/Tempo) would add timing breakdowns per hop.
+- **Tracing:** add Redis spans (rate limiter, circuit breaker), tail-based sampling in an OpenTelemetry Collector to keep every failed delivery's trace at low sampling ratios, and span metrics → RED dashboards.
 - **Exactly-once with the provider:** today it is at-least-once, plus provider-side deduplication through `Idempotency-Key`. Full exactly-once needs provider support for idempotent requests, which is what that header is for.
 - **Data growth:** partition `notifications` and `notification_attempts` by month and archive old partitions. Lower Horizon's job trim times (`config/horizon.php`) at high volume.
 - **Metrics export:** expose the same counters in Prometheus format, plus alerts on circuit state, oldest pending age and failure rate.

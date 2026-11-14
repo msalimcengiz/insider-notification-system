@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Enums\NotificationStatus;
 use App\Models\Notification;
 use App\Services\Delivery\NotificationDispatcher;
+use App\Support\Tracing\Tracing;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -24,7 +25,23 @@ final class DispatchScheduledNotifications extends Command
 
     protected $description = 'Queue scheduled notifications that are due';
 
-    public function handle(NotificationDispatcher $dispatcher): int
+    public function handle(NotificationDispatcher $dispatcher, Tracing $tracing): int
+    {
+        $due = Notification::query()
+            ->where('status', NotificationStatus::Scheduled)
+            ->where('scheduled_at', '<=', now());
+
+        // Runs every 10 seconds: only start a trace when there is work.
+        if (! $due->exists()) {
+            $this->info('Dispatched 0 scheduled notification(s).');
+
+            return self::SUCCESS;
+        }
+
+        return $tracing->inSpan('notifications:dispatch-scheduled', fn (): int => $this->dispatchDue($dispatcher));
+    }
+
+    private function dispatchDue(NotificationDispatcher $dispatcher): int
     {
         $limit = (int) $this->option('limit');
         $dispatched = 0;

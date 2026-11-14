@@ -7,6 +7,7 @@ namespace App\Jobs\Middleware;
 use App\Jobs\SendNotification;
 use App\Services\CircuitBreaker\CircuitBreaker;
 use Closure;
+use OpenTelemetry\API\Trace\Span;
 
 /**
  * Holds a channel's jobs back while its circuit is open. Runs before the rate
@@ -23,6 +24,7 @@ final readonly class CheckCircuitBreaker
         $wait = $this->breaker->allowRequest($job->channel);
 
         if ($wait > 0) {
+            Span::getCurrent()->addEvent('circuit.open', ['circuit.retry_in_seconds' => $wait]);
             $job->release($wait + random_int(0, 3));
 
             return null;

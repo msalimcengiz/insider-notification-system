@@ -9,6 +9,8 @@ use App\Enums\Channel;
 use App\Jobs\Middleware\CheckCircuitBreaker;
 use App\Jobs\Middleware\SkipUnclaimable;
 use App\Jobs\Middleware\ThrottleChannel;
+use App\Jobs\Middleware\TraceJob;
+use App\Support\Tracing\Tracing;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -32,10 +34,20 @@ final class SendNotification implements ShouldQueue
 
     public int $timeout = 30;
 
+    /**
+     * W3C trace context of the span that dispatched the job, so the worker's
+     * span continues the same trace (see TraceJob).
+     *
+     * @var array<string, string>
+     */
+    public array $traceContext = [];
+
     public function __construct(
         public readonly string $notificationId,
         public readonly Channel $channel,
-    ) {}
+    ) {
+        $this->traceContext = app(Tracing::class)->currentCarrier();
+    }
 
     /**
      * @return list<object>
@@ -43,6 +55,7 @@ final class SendNotification implements ShouldQueue
     public function middleware(): array
     {
         return [
+            app(TraceJob::class),
             new SkipUnclaimable,
             app(CheckCircuitBreaker::class),
             ThrottleChannel::fromConfig(),

@@ -1,5 +1,22 @@
 name: insider-notification-system
 
+# OpenTelemetry (distributed tracing). These must be real environment
+# variables: the SDK configures itself while Composer's autoloader loads,
+# before Laravel reads .env. Values can be overridden from .env / the shell.
+# OTEL_PHP_AUTOLOAD_ENABLED is set only for the processes that are traced
+# (php-fpm via docker/php/www.conf, Horizon, the scheduler), so ad-hoc CLI
+# commands such as `php artisan test` run without the SDK.
+x-otel: &otel
+  OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_PROPAGATORS: tracecontext,baggage
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+
 x-php: &php
   build:
     context: .
@@ -18,7 +35,9 @@ services:
   app:
     <<: *php
     environment:
+      <<: *otel
       CONTAINER_ROLE: app
+      OTEL_SERVICE_NAME: notification-api
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,7 +65,10 @@ services:
   horizon:
     <<: *php
     environment:
+      <<: *otel
       CONTAINER_ROLE: horizon
+      OTEL_PHP_AUTOLOAD_ENABLED: "true"
+      OTEL_SERVICE_NAME: notification-worker
     command: ["php", "artisan", "horizon"]
     stop_signal: SIGTERM
     stop_grace_period: 30s
@@ -57,7 +79,10 @@ services:
   scheduler:
     <<: *php
     environment:
+      <<: *otel
       CONTAINER_ROLE: scheduler
+      OTEL_PHP_AUTOLOAD_ENABLED: "true"
+      OTEL_SERVICE_NAME: notification-scheduler
     command: ["php", "artisan", "schedule:work"]
     depends_on:
       app:
@@ -68,6 +93,7 @@ services:
     <<: *php
     environment:
       CONTAINER_ROLE: reverb
+      OTEL_SDK_DISABLED: "true"
     command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
     ports:
       - "${REVERB_EXTERNAL_PORT:-8080}:8080"
@@ -107,6 +133,15 @@ services:
     depends_on:
       - nginx
       - mock-provider
+
+  # Trace backend and UI: http://localhost:16686 (receives OTLP on 4318).
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine

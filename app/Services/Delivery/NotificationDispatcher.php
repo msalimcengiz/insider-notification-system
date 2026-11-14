@@ -9,9 +9,11 @@ use App\Enums\NotificationStatus;
 use App\Enums\Priority;
 use App\Jobs\SendNotification;
 use App\Models\Notification;
+use App\Support\Tracing\Tracing;
 use Illuminate\Contracts\Queue\Factory as Queue;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use OpenTelemetry\API\Trace\SpanKind;
 use Throwable;
 
 /**
@@ -27,7 +29,10 @@ final readonly class NotificationDispatcher
 {
     private const int CHUNK_SIZE = 500;
 
-    public function __construct(private Queue $queue) {}
+    public function __construct(
+        private Queue $queue,
+        private Tracing $tracing,
+    ) {}
 
     /**
      * @param  iterable<Notification|string>  $notifications  models or IDs
@@ -85,20 +90,32 @@ final readonly class NotificationDispatcher
         foreach ($rows as $row) {
             /** @var object{id: string, channel: string, priority: string} $row */
             $channel = Channel::from($row->channel);
-            $queueName = $channel->queue(Priority::from($row->priority));
-
-            $byQueue[$queueName][] = new SendNotification($row->id, $channel);
+            $byQueue[$channel->queue(Priority::from($row->priority))][] = [$row->id, $channel];
         }
 
         $pushed = 0;
 
-        foreach ($byQueue as $queueName => $jobs) {
-            try {
-                $this->queue->connection()->bulk($jobs, '', $queueName);
-                $pushed += count($jobs);
-            } catch (Throwable $e) {
-                $this->revertToPending($jobs, $e);
-            }
+        foreach ($byQueue as $queueName => $items) {
+            // Producer span per queue. Jobs are created inside it, so each one
+            // carries this span's context to the worker that processes it.
+            $pushed += $this->tracing->inSpan("send {$queueName}", function () use ($items, $queueName): int {
+                $jobs = array_map(fn (array $item): SendNotification => new SendNotification($item[0], $item[1]), $items);
+
+                try {
+                    $this->queue->connection()->bulk($jobs, '', $queueName);
+
+                    return count($jobs);
+                } catch (Throwable $e) {
+                    $this->revertToPending($jobs, $e);
+
+                    return 0;
+                }
+            }, [
+                'messaging.system' => 'redis',
+                'messaging.operation.type' => 'send',
+                'messaging.destination.name' => $queueName,
+                'messaging.batch.message_count' => count($items),
+            ], SpanKind::KIND_PRODUCER);
         }
 
         return $pushed;

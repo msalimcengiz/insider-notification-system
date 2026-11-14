@@ -8,6 +8,7 @@ use App\Jobs\SendNotification;
 use App\Services\RateLimiting\SlidingWindowRateLimiter;
 use Closure;
 use Illuminate\Support\Sleep;
+use OpenTelemetry\API\Trace\Span;
 
 /**
  * Enforces the per-channel rate limit before a provider call.
@@ -43,6 +44,7 @@ final readonly class ThrottleChannel
 
         while (($waitMs = $this->limiter->attempt("channel:{$job->channel->value}", $this->perSecond, $this->windowMs)) > 0) {
             if ($waited + $waitMs > $this->maxWaitMs) {
+                Span::getCurrent()->addEvent('rate_limit.released', ['rate_limit.waited_ms' => $waited]);
                 $job->release(1);
 
                 return null;
@@ -50,6 +52,11 @@ final readonly class ThrottleChannel
 
             Sleep::usleep($waitMs * 1000);
             $waited += $waitMs;
+        }
+
+        if ($waited > 0) {
+            // Shows up on the job's trace as time spent waiting for a slot.
+            Span::getCurrent()->addEvent('rate_limit.waited', ['rate_limit.waited_ms' => $waited]);
         }
 
         return $next($job);

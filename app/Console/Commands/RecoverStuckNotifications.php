@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Enums\NotificationStatus;
 use App\Models\Notification;
 use App\Services\Delivery\NotificationDispatcher;
+use App\Support\Tracing\Tracing;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
@@ -31,7 +32,7 @@ final class RecoverStuckNotifications extends Command
 
     protected $description = 'Re-dispatch notifications stuck in a non-final status';
 
-    public function handle(NotificationDispatcher $dispatcher): int
+    public function handle(NotificationDispatcher $dispatcher, Tracing $tracing): int
     {
         $config = (array) config('notifications.recovery');
         $limit = (int) ($config['max_per_run'] ?? 5000);
@@ -55,8 +56,7 @@ final class RecoverStuckNotifications extends Command
             ],
         ];
 
-        $recovered = [];
-
+        $stuck = [];
         foreach ($rules as $name => [$status, $isStuck]) {
             /** @var list<string> $ids */
             $ids = Notification::query()
@@ -67,7 +67,18 @@ final class RecoverStuckNotifications extends Command
                 ->pluck('id')
                 ->all();
 
-            $recovered[$name] = $ids === [] ? 0 : $dispatcher->dispatch($ids, from: [$status]);
+            $stuck[$name] = [$status, $ids];
+        }
+
+        $recovered = array_map(fn (array $entry): int => 0, $stuck);
+
+        // Runs every minute: only start a trace when something is stuck.
+        if (array_filter($stuck, fn (array $entry): bool => $entry[1] !== []) !== []) {
+            $tracing->inSpan('notifications:recover', function () use ($stuck, $dispatcher, &$recovered): void {
+                foreach ($stuck as $name => [$status, $ids]) {
+                    $recovered[$name] = $ids === [] ? 0 : $dispatcher->dispatch($ids, from: [$status]);
+                }
+            });
         }
 
         $total = array_sum($recovered);

@@ -7,6 +7,7 @@ use App\Enums\Priority;
 use App\Jobs\SendNotification;
 use App\Models\Notification;
 use App\Services\Delivery\NotificationDispatcher;
+use App\Support\Tracing\Tracing;
 use Illuminate\Contracts\Queue\Factory;
 use Illuminate\Support\Facades\Queue;
 
@@ -63,7 +64,7 @@ it('puts notifications back to pending when the queue is unavailable', function 
     $factory = Mockery::mock(Factory::class);
     $factory->allows('connection')->andReturn($failingQueue);
 
-    $count = (new NotificationDispatcher($factory))->dispatch([$notification]);
+    $count = (new NotificationDispatcher($factory, app(Tracing::class)))->dispatch([$notification]);
 
     expect($count)->toBe(0)
         ->and($notification->refresh()->status)->toBe(NotificationStatus::Pending)
@@ -75,7 +76,7 @@ it('still accepts the API request when the queue is down', function (): void {
     $failingQueue->allows('bulk')->andThrow(new RuntimeException('Connection refused'));
     $factory = Mockery::mock(Factory::class);
     $factory->allows('connection')->andReturn($failingQueue);
-    $this->app->instance(NotificationDispatcher::class, new NotificationDispatcher($factory));
+    $this->app->instance(NotificationDispatcher::class, new NotificationDispatcher($factory, app(Tracing::class)));
 
     $this->postJson('/api/v1/notifications', ['channel' => 'sms', 'recipient' => '+905551234567', 'content' => 'Hi'])
         ->assertAccepted()

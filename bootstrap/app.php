@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Exceptions\IdempotencyKeyConflict;
 use App\Http\Middleware\AssignCorrelationId;
 use App\Http\Middleware\LogRequest;
+use App\Http\Middleware\TraceHttpRequest;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -20,6 +21,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Outermost, so the server span covers the whole request.
+        $middleware->prepend(TraceHttpRequest::class);
+
         $middleware->api(prepend: [
             AssignCorrelationId::class,
             LogRequest::class,
