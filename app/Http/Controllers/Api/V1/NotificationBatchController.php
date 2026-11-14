@@ -12,8 +12,13 @@ use App\Http\Middleware\AssignCorrelationId;
 use App\Http\Requests\StoreNotificationBatchRequest;
 use App\Http\Resources\NotificationBatchResource;
 use App\Models\NotificationBatch;
+use Dedoc\Scramble\Attributes\BodyParameter;
+use Dedoc\Scramble\Attributes\Group;
+use Dedoc\Scramble\Attributes\HeaderParameter;
+use Dedoc\Scramble\Attributes\Response;
 use Illuminate\Http\JsonResponse;
 
+#[Group('Batches', weight: 2)]
 final class NotificationBatchController extends Controller
 {
     /**
@@ -27,6 +32,14 @@ final class NotificationBatchController extends Controller
      * used are not created again and are reported with `duplicate: true` and
      * the ID of the existing notification.
      */
+    #[BodyParameter('notifications', 'Up to 1000 notifications, each with the fields of `POST /notifications` plus an optional `idempotency_key`.', required: true, type: 'array', example: [
+        ['channel' => 'sms', 'recipient' => '+905551234567', 'content' => 'Flash sale: 40% off for one hour!', 'priority' => 'high', 'idempotency_key' => 'sale-42-user-1'],
+        ['channel' => 'email', 'recipient' => 'ada@example.com', 'template' => 'order-shipped-email', 'variables' => ['name' => 'Ada', 'order_id' => '42', 'eta' => 'Friday']],
+        ['channel' => 'push', 'recipient' => 'fcm-token-0123456789abcdef0123456789abcdef', 'content' => 'Your order is on its way', 'priority' => 'low'],
+    ])]
+    #[Response(202, 'Accepted for delivery (or 200 when replayed from an Idempotency-Key).', type: 'array{data: array{batch_id: string, accepted: int, duplicates: int, notifications: list<array{index: int, id: string, duplicate: bool}>}}')]
+    #[HeaderParameter('Idempotency-Key', 'Makes retries safe: a repeated key returns the original batch (200).', type: 'string', example: 'campaign-2026-11-flash-sale')]
+    #[HeaderParameter('X-Correlation-ID', 'Optional trace ID, echoed on every response.', type: 'string')]
     public function store(StoreNotificationBatchRequest $request, CreateNotificationBatch $create): JsonResponse
     {
         $result = $create->handle(

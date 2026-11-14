@@ -31,6 +31,13 @@ jobs:
       - name: Larastan
         run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
 
+      - name: OpenAPI spec is up to date
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          php artisan scramble:export --path=build/openapi.json
+          diff -u openapi.json build/openapi.json || (echo "::error::openapi.json is stale, run: php artisan scramble:export --path=openapi.json" && exit 1)
+
   tests:
     name: Tests
     runs-on: ubuntu-latest

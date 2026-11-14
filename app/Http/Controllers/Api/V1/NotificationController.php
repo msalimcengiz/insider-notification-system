@@ -13,10 +13,15 @@ use App\Http\Requests\ListNotificationsRequest;
 use App\Http\Requests\StoreNotificationRequest;
 use App\Http\Resources\NotificationResource;
 use App\Models\Notification;
+use Dedoc\Scramble\Attributes\BodyParameter;
+use Dedoc\Scramble\Attributes\Group;
+use Dedoc\Scramble\Attributes\HeaderParameter;
+use Dedoc\Scramble\Attributes\Response;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
+#[Group('Notifications', weight: 1)]
 final class NotificationController extends Controller
 {
     /**
@@ -26,9 +31,18 @@ final class NotificationController extends Controller
      * status with `GET /notifications/{id}`. Send an `Idempotency-Key` header
      * to make retries safe: repeating a request with the same key returns the
      * original notification (200) instead of creating a new one (202).
-     *
-     * @response 202 NotificationResource
      */
+    #[BodyParameter('channel', 'Delivery channel.', required: true, type: "'sms'|'email'|'push'", example: 'sms')]
+    #[BodyParameter('recipient', 'E.164 phone number (sms), email address (email) or device token (push).', required: true, type: 'string', example: '+905551234567')]
+    #[BodyParameter('content', 'Message text. Required unless `template` is given. SMS: max 10 segments (GSM-7 1530 / UCS-2 670 characters); push: 1000; email: 100000.', type: 'string', example: 'Your order has shipped.')]
+    #[BodyParameter('priority', 'Defaults to normal.', type: "'high'|'normal'|'low'", example: 'high')]
+    #[BodyParameter('subject', 'Email only.', type: 'string')]
+    #[BodyParameter('template', 'Name of a template to render instead of `content`.', type: 'string', example: 'otp-sms')]
+    #[BodyParameter('variables', 'Values for the template placeholders.', type: 'object', example: ['code' => '482913', 'minutes' => 5])]
+    #[BodyParameter('scheduled_at', 'Deliver later (ISO 8601, future, max 30 days ahead).', type: 'string', format: 'date-time', example: '2026-12-01T09:00:00Z')]
+    #[Response(202, 'Accepted for delivery (or 200 when replayed from an Idempotency-Key).', type: 'array{data: NotificationResource}')]
+    #[HeaderParameter('Idempotency-Key', 'Makes retries safe: a repeated key returns the original notification (200) instead of creating a new one.', type: 'string', example: 'order-42-shipped')]
+    #[HeaderParameter('X-Correlation-ID', 'Optional trace ID (letters, digits, ".", "_", "-"; max 64). Generated when missing and echoed on every response.', type: 'string', example: 'checkout-7f3a')]
     public function store(StoreNotificationRequest $request, CreateNotification $create): JsonResponse
     {
         [$notification, $replayed] = $create->handle(
