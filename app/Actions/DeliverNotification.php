@@ -1,0 +1,131 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Actions;
+
+use App\Enums\NotificationStatus;
+use App\Models\Notification;
+use App\Models\NotificationAttempt;
+use App\Services\Delivery\DeliveryResult;
+use App\Services\Delivery\ProviderRegistry;
+use App\Services\Delivery\RetryPolicy;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+
+/**
+ * One delivery attempt: claim → call provider → record the outcome.
+ */
+final readonly class DeliverNotification
+{
+    public function __construct(
+        private ProviderRegistry $providers,
+        private RetryPolicy $retryPolicy,
+    ) {}
+
+    /**
+     * @return int|null seconds after which the job must run again, or null when done
+     */
+    public function handle(string $notificationId): ?int
+    {
+        $notification = $this->claim($notificationId);
+
+        if ($notification === null) {
+            return null;
+        }
+
+        $result = $this->providers->for($notification->channel)->send($notification);
+
+        return $this->record($notification, $result);
+    }
+
+    /**
+     * Atomically moves the notification to `processing`. Fails (returns null)
+     * when it was cancelled, already sent, or is being handled by another
+     * worker, which also makes duplicate jobs harmless.
+     */
+    private function claim(string $notificationId): ?Notification
+    {
+        $now = now();
+
+        $claimed = Notification::query()
+            ->whereKey($notificationId)
+            ->inStatus([NotificationStatus::Queued, NotificationStatus::Retrying])
+            ->update([
+                'status' => NotificationStatus::Processing,
+                'processing_started_at' => $now,
+                'next_attempt_at' => null,
+                'updated_at' => $now,
+            ]);
+
+        if ($claimed === 0) {
+            Log::info('notification.skipped', [
+                'notification_id' => $notificationId,
+                'status' => Notification::query()->whereKey($notificationId)->value('status'),
+            ]);
+
+            return null;
+        }
+
+        return Notification::query()->findOrFail($notificationId);
+    }
+
+    private function record(Notification $notification, DeliveryResult $result): ?int
+    {
+        $attempt = $notification->attempts + 1;
+        $retryIn = null;
+        $now = now();
+
+        $changes = [
+            'attempts' => $attempt,
+            'last_error' => $result->error,
+        ];
+
+        if ($result->succeeded()) {
+            $changes += [
+                'status' => NotificationStatus::Sent,
+                'provider_message_id' => $result->providerMessageId,
+                'sent_at' => $now,
+            ];
+        } elseif ($result->isRetryable() && $this->retryPolicy->shouldRetry($attempt)) {
+            $retryIn = $this->retryPolicy->delayFor($attempt, $result->retryAfter);
+            $changes += [
+                'status' => NotificationStatus::Retrying,
+                'next_attempt_at' => $now->addSeconds($retryIn),
+            ];
+        } else {
+            $changes += [
+                'status' => NotificationStatus::Failed,
+                'failed_at' => $now,
+            ];
+        }
+
+        DB::transaction(function () use ($notification, $result, $attempt, $changes): void {
+            NotificationAttempt::query()->create([
+                'notification_id' => $notification->id,
+                'attempt_number' => $attempt,
+                'outcome' => $result->outcome,
+                'http_status' => $result->httpStatus,
+                'error_message' => $result->error,
+                'response_body' => $result->responseBody,
+                'duration_ms' => $result->durationMs,
+            ]);
+
+            $notification->update($changes);
+        });
+
+        Log::log($result->succeeded() ? 'info' : 'warning', 'notification.attempt', [
+            'notification_id' => $notification->id,
+            'channel' => $notification->channel->value,
+            'attempt' => $attempt,
+            'outcome' => $result->outcome->value,
+            'http_status' => $result->httpStatus,
+            'duration_ms' => $result->durationMs,
+            'status' => $notification->status->value,
+            'retry_in' => $retryIn,
+            'error' => $result->error,
+        ]);
+
+        return $retryIn;
+    }
+}

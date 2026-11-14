@@ -8,10 +8,13 @@ use App\DTOs\NotificationData;
 use App\Enums\NotificationStatus;
 use App\Exceptions\IdempotencyKeyConflict;
 use App\Models\Notification;
+use App\Services\Delivery\NotificationDispatcher;
 use Illuminate\Database\UniqueConstraintViolationException;
 
 final readonly class CreateNotification
 {
+    public function __construct(private NotificationDispatcher $dispatcher) {}
+
     /**
      * @return array{0: Notification, 1: bool} the notification and whether it
      *                                         was replayed from an earlier request with the same idempotency key
@@ -53,6 +56,11 @@ final readonly class CreateNotification
             }
 
             return [$this->replay($existing, $data, $idempotencyKey), true];
+        }
+
+        if ($notification->status === NotificationStatus::Pending) {
+            $this->dispatcher->dispatchOne($notification);
+            $notification->refresh();
         }
 
         return [$notification, false];

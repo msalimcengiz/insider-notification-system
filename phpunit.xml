@@ -29,6 +29,8 @@
         <env name="LOG_CHANNEL" value="null"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="REDIS_DB" value="2"/>
+        <env name="NOTIFICATION_PROVIDER_URL" value="https://provider.test/notify"/>
         <env name="SESSION_DRIVER" value="array"/>
     </php>
 </phpunit>

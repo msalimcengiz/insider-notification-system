@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 /*
@@ -19,6 +20,9 @@ use Tests\TestCase;
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
     ->in('Feature');
+
+// API tests assert what gets queued; delivery itself is tested separately.
+pest()->beforeEach(fn () => Queue::fake())->in('Feature/Api');
 
 /*
 |--------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Enums\Channel;
 use Illuminate\Support\Str;
 
 return [
@@ -199,35 +200,57 @@ return [
     */
 
     'defaults' => [
-        'supervisor-1' => [
+        // One supervisor per channel. `balance => false` makes every worker
+        // drain its queues strictly in the listed order (high, normal, low),
+        // and separate supervisors keep a backlog on one channel from
+        // starving the others. `tries => 0` defers to the job's own limits.
+        // min = max: a fixed pool (Horizon otherwise starts (min+max)/2).
+        'notifications-sms' => [
+            'connection' => 'redis',
+            'queue' => Channel::Sms->queuesByPriority(),
+            'balance' => false,
+            'minProcesses' => (int) env('NOTIFICATIONS_SMS_WORKERS', 4),
+            'maxProcesses' => (int) env('NOTIFICATIONS_SMS_WORKERS', 4),
+            'tries' => 0,
+            'timeout' => 60,
+            'memory' => 128,
+        ],
+        'notifications-email' => [
+            'connection' => 'redis',
+            'queue' => Channel::Email->queuesByPriority(),
+            'balance' => false,
+            'minProcesses' => (int) env('NOTIFICATIONS_EMAIL_WORKERS', 4),
+            'maxProcesses' => (int) env('NOTIFICATIONS_EMAIL_WORKERS', 4),
+            'tries' => 0,
+            'timeout' => 60,
+            'memory' => 128,
+        ],
+        'notifications-push' => [
+            'connection' => 'redis',
+            'queue' => Channel::Push->queuesByPriority(),
+            'balance' => false,
+            'minProcesses' => (int) env('NOTIFICATIONS_PUSH_WORKERS', 4),
+            'maxProcesses' => (int) env('NOTIFICATIONS_PUSH_WORKERS', 4),
+            'tries' => 0,
+            'timeout' => 60,
+            'memory' => 128,
+        ],
+        // Everything else (broadcasts, housekeeping).
+        'default' => [
             'connection' => 'redis',
             'queue' => ['default'],
-            'balance' => 'auto',
-            'autoScalingStrategy' => 'time',
-            'maxProcesses' => 1,
-            'maxTime' => 0,
-            'maxJobs' => 0,
-            'memory' => 128,
-            'tries' => 1,
+            'balance' => 'simple',
+            'processes' => 1,
+            'tries' => 3,
             'timeout' => 60,
-            'nice' => 0,
+            'memory' => 128,
         ],
     ],
 
     'environments' => [
-        'production' => [
-            'supervisor-1' => [
-                'maxProcesses' => 10,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
-            ],
-        ],
-
-        'local' => [
-            'supervisor-1' => [
-                'maxProcesses' => 3,
-            ],
-        ],
+        'production' => [],
+        'local' => [],
+        'testing' => [],
     ],
 
     /*

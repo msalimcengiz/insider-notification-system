@@ -8,6 +8,7 @@ use App\DTOs\NotificationData;
 use App\Enums\NotificationStatus;
 use App\Models\Notification;
 use App\Models\NotificationBatch;
+use App\Services\Delivery\NotificationDispatcher;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -26,6 +27,8 @@ final readonly class CreateNotificationBatch
 {
     private const int INSERT_CHUNK_SIZE = 500;
 
+    public function __construct(private NotificationDispatcher $dispatcher) {}
+
     /**
      * @param  list<NotificationData>  $items
      */
@@ -36,13 +39,22 @@ final readonly class CreateNotificationBatch
         }
 
         try {
-            return DB::transaction(fn (): BatchCreationResult => $this->create($items, $idempotencyKey, $correlationId));
+            $result = DB::transaction(fn (): BatchCreationResult => $this->create($items, $idempotencyKey, $correlationId));
         } catch (UniqueConstraintViolationException $e) {
             // Lost a race against a concurrent request with the same batch key.
             $existing = $idempotencyKey !== null ? $this->findBatch($idempotencyKey) : null;
 
             return $existing !== null ? $this->replay($existing) : throw $e;
         }
+
+        // After commit: workers must never see a job for a row that is not
+        // visible yet. Scheduled items are skipped (only pending ones move).
+        $this->dispatcher->dispatch(array_column(
+            array_filter($result->items, fn (array $item): bool => ! $item['duplicate']),
+            'id',
+        ));
+
+        return $result;
     }
 
     /**

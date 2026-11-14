@@ -2,10 +2,12 @@
 
 declare(strict_types=1);
 
+use App\Jobs\SendNotification;
 use App\Models\Notification;
 use App\Models\NotificationBatch;
 use App\Models\Template;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 
 const BATCH_URL = '/api/v1/notifications/batch';
 
@@ -36,6 +38,31 @@ it('creates every notification of a batch', function (): void {
         ->and($batch->total_count)->toBe(3)
         ->and($batch->notifications()->orderBy('batch_position')->pluck('id')->all())
         ->toBe(array_column($response->json('data.notifications'), 'id'));
+});
+
+it('queues every item on the queue of its channel and priority', function (): void {
+    $this->postJson(BATCH_URL, ['notifications' => [
+        batchItem(1, ['priority' => 'high']),
+        batchItem(2),
+        batchItem(3, ['channel' => 'email', 'recipient' => 'ada@example.com', 'priority' => 'low']),
+        batchItem(4, ['scheduled_at' => now()->addHour()->toIso8601String()]),
+    ]])->assertAccepted();
+
+    Queue::assertPushedOn('notifications-sms-high', SendNotification::class);
+    Queue::assertPushedOn('notifications-sms-normal', SendNotification::class);
+    Queue::assertPushedOn('notifications-email-low', SendNotification::class);
+    Queue::assertPushed(SendNotification::class, 3);
+
+    expect(Notification::query()->where('status', 'queued')->count())->toBe(3)
+        ->and(Notification::query()->where('status', 'scheduled')->count())->toBe(1);
+});
+
+it('does not queue duplicates or replayed batches again', function (): void {
+    $this->postJson(BATCH_URL, ['notifications' => [batchItem(1, ['idempotency_key' => 'a'])]], ['Idempotency-Key' => 'b1']);
+    $this->postJson(BATCH_URL, ['notifications' => [batchItem(1, ['idempotency_key' => 'a'])]], ['Idempotency-Key' => 'b1']);
+    $this->postJson(BATCH_URL, ['notifications' => [batchItem(1, ['idempotency_key' => 'a'])]]);
+
+    Queue::assertPushed(SendNotification::class, 1);
 });
 
 it('accepts the maximum batch size', function (): void {

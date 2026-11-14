@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use App\Enums\NotificationStatus;
+use App\Jobs\SendNotification;
 use App\Models\Notification;
 use App\Models\Template;
+use Illuminate\Support\Facades\Queue;
 
 const NOTIFICATIONS_URL = '/api/v1/notifications';
 
@@ -18,18 +20,36 @@ function smsPayload(array $overrides = []): array
     ];
 }
 
-it('creates a pending notification and returns 202', function (): void {
+it('creates a notification, queues it on its channel/priority queue and returns 202', function (): void {
     $response = $this->postJson(NOTIFICATIONS_URL, smsPayload(['priority' => 'high']));
 
     $response->assertAccepted()
         ->assertHeader('Idempotent-Replayed', 'false')
-        ->assertJsonPath('data.status', 'pending')
+        ->assertJsonPath('data.status', 'queued')
         ->assertJsonPath('data.priority', 'high')
         ->assertJsonPath('data.channel', 'sms');
 
     $notification = Notification::query()->sole();
-    expect($notification->status)->toBe(NotificationStatus::Pending)
+    expect($notification->status)->toBe(NotificationStatus::Queued)
+        ->and($notification->queued_at)->not->toBeNull()
         ->and($response->json('data.id'))->toBe($notification->id);
+
+    Queue::assertPushedOn('notifications-sms-high', SendNotification::class,
+        fn (SendNotification $job): bool => $job->notificationId === $notification->id);
+});
+
+it('does not queue scheduled notifications yet', function (): void {
+    $this->postJson(NOTIFICATIONS_URL, smsPayload(['scheduled_at' => now()->addHour()->toIso8601String()]))
+        ->assertAccepted();
+
+    Queue::assertNothingPushed();
+});
+
+it('does not queue a replayed request again', function (): void {
+    $this->postJson(NOTIFICATIONS_URL, smsPayload(), ['Idempotency-Key' => 'k'])->assertAccepted();
+    $this->postJson(NOTIFICATIONS_URL, smsPayload(), ['Idempotency-Key' => 'k'])->assertOk();
+
+    Queue::assertPushed(SendNotification::class, 1);
 });
 
 it('defaults to normal priority', function (): void {
