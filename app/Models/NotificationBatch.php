@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Enums\NotificationStatus;
 use Carbon\CarbonImmutable;
 use Database\Factories\NotificationBatchFactory;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
@@ -43,5 +44,26 @@ class NotificationBatch extends Model
     public function notifications(): HasMany
     {
         return $this->hasMany(Notification::class, 'batch_id');
+    }
+
+    /**
+     * Number of notifications per status, every status included.
+     *
+     * @return array<string, int>
+     */
+    public function statusCounts(): array
+    {
+        $counts = $this->notifications()
+            ->toBase()
+            ->selectRaw('status, count(*) as aggregate')
+            ->groupBy('status')
+            ->pluck('aggregate', 'status');
+
+        $result = [];
+        foreach (NotificationStatus::cases() as $status) {
+            $result[$status->value] = (int) ($counts[$status->value] ?? 0);
+        }
+
+        return $result;
     }
 }

@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\CancelNotificationBatch;
 use App\Actions\CreateNotificationBatch;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AssignCorrelationId;
 use App\Http\Requests\StoreNotificationBatchRequest;
+use App\Http\Resources\NotificationBatchResource;
+use App\Models\NotificationBatch;
 use Illuminate\Http\JsonResponse;
 
 final class NotificationBatchController extends Controller
@@ -41,5 +44,32 @@ final class NotificationBatchController extends Controller
                 ],
             ], $result->replayed ? 200 : 202)
             ->header('Idempotent-Replayed', $result->replayed ? 'true' : 'false');
+    }
+
+    /**
+     * Get a batch.
+     *
+     * Aggregated progress of the batch: how many notifications are in each
+     * status. List the notifications themselves with
+     * `GET /notifications?batch_id={id}`.
+     */
+    public function show(NotificationBatch $batch): NotificationBatchResource
+    {
+        return NotificationBatchResource::make($batch);
+    }
+
+    /**
+     * Cancel a batch.
+     *
+     * Cancels every notification of the batch that is still cancellable.
+     * Notifications already being processed or finished are not affected.
+     */
+    public function cancel(NotificationBatch $batch, CancelNotificationBatch $cancel): JsonResponse
+    {
+        $cancelled = $cancel->handle($batch);
+
+        return NotificationBatchResource::make($batch)
+            ->additional(['meta' => ['cancelled' => $cancelled]])
+            ->response();
     }
 }

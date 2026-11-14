@@ -39,6 +39,7 @@ final class NotificationResource extends JsonResource
             'cancelled_at' => $this->cancelled_at?->toIso8601ZuluString(),
             'created_at' => $this->created_at->toIso8601ZuluString(),
             'updated_at' => $this->updated_at->toIso8601ZuluString(),
+            'delivery_attempts' => NotificationAttemptResource::collection($this->whenLoaded('deliveryAttempts')),
         ];
     }
 }
