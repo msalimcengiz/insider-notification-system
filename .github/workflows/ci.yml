@@ -31,13 +31,6 @@ jobs:
       - name: Larastan
         run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
 
-      - name: OpenAPI spec is up to date
-        run: |
-          cp .env.example .env
-          php artisan key:generate
-          php artisan scramble:export --path=build/openapi.json
-          diff -u openapi.json build/openapi.json || (echo "::error::openapi.json is stale, run: php artisan scramble:export --path=openapi.json" && exit 1)
-
   tests:
     name: Tests
     runs-on: ubuntu-latest
@@ -80,6 +73,16 @@ jobs:
 
       - name: Run test suite
         run: php artisan test
+
+      # Scramble reads column types from the database, so this runs here
+      # (with PostgreSQL) on a migrated schema.
+      - name: OpenAPI spec is up to date
+        env:
+          DB_DATABASE: notifications_testing
+        run: |
+          php artisan migrate:fresh --force
+          php artisan scramble:export --path=build/openapi.json
+          diff -u openapi.json build/openapi.json || (echo "::error::openapi.json is stale, run: composer docs" && exit 1)
 
   docker:
     name: Build & publish image
