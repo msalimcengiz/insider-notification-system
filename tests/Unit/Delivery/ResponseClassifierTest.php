@@ -24,7 +24,7 @@ it('treats 202 with a messageId as success', function (): void {
         ->and($result->durationMs)->toBe(42);
 });
 
-it('retries a 2xx it cannot trust', function (mixed $body): void {
+it('retries a 202 that does not match the documented response', function (mixed $body): void {
     expect((new ResponseClassifier)->classify(providerResponse(202, $body), 1)->outcome)
         ->toBe(AttemptOutcome::RetryableFailure);
 })->with([
@@ -32,7 +32,26 @@ it('retries a 2xx it cannot trust', function (mixed $body): void {
     'not json' => ['<html>ok</html>'],
     'no messageId' => [['status' => 'accepted']],
     'empty messageId' => [['messageId' => '']],
+    'status not accepted' => [['messageId' => 'abc', 'status' => 'queued']],
 ]);
+
+it('only treats 202 Accepted as acceptance', function (int $status): void {
+    $result = (new ResponseClassifier)->classify(
+        providerResponse($status, ['messageId' => 'abc', 'status' => 'accepted']),
+        1,
+    );
+
+    expect($result->outcome)->toBe(AttemptOutcome::RetryableFailure)
+        ->and($result->error)->toBe("Provider answered {$status} but the expected status is 202 Accepted.");
+})->with([200, 201, 204]);
+
+it('reports an unconfigured webhook.site URL clearly', function (): void {
+    // What webhook.site answers before its response is configured.
+    $result = (new ResponseClassifier)->classify(providerResponse(200, 'This URL has no default content configured.'), 1);
+
+    expect($result->outcome)->toBe(AttemptOutcome::RetryableFailure)
+        ->and($result->error)->toContain('expected status is 202');
+});
 
 it('classifies error statuses', function (int $status, AttemptOutcome $outcome): void {
     expect((new ResponseClassifier)->classify(providerResponse($status, ['message' => 'x']), 1)->outcome)->toBe($outcome);

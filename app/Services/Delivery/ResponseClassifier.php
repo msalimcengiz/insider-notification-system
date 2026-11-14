@@ -10,14 +10,21 @@ use Illuminate\Http\Client\Response;
 /**
  * Turns a provider response into a delivery outcome.
  *
- *  - 2xx with a messageId                → success
- *  - 2xx without a usable messageId      → retryable (cannot prove acceptance)
- *  - 408, 425, 429, 5xx                  → retryable (transient)
- *  - any other 4xx / unexpected status   → permanent (retrying won't help)
- *  - timeout / connection error          → retryable
+ * The assessment specifies the acceptance response exactly:
+ * 202 {"messageId", "status": "accepted", "timestamp"}. Only that counts as
+ * success; anything else in the 2xx range cannot prove the message was
+ * accepted and is retried.
+ *
+ *  - 202 with a messageId and status "accepted"   → success
+ *  - any other 2xx, or 202 not matching the above → retryable
+ *  - 408, 425, 429, 5xx                           → retryable (transient)
+ *  - any other 4xx / unexpected status            → permanent (retrying won't help)
+ *  - timeout / connection error                   → retryable
  */
 final class ResponseClassifier
 {
+    private const int ACCEPTED = 202;
+
     private const array RETRYABLE_STATUSES = [408, 425, 429];
 
     private const int MAX_STORED_ERROR_LENGTH = 1000;
@@ -28,9 +35,12 @@ final class ResponseClassifier
         $body = $this->jsonBody($response);
 
         if ($response->successful()) {
-            $messageId = $body['messageId'] ?? null;
+            $problem = $this->acceptanceProblem($status, $body);
 
-            if (is_string($messageId) && $messageId !== '') {
+            if ($problem === null) {
+                /** @var string $messageId */
+                $messageId = $body['messageId'] ?? '';
+
                 return new DeliveryResult(AttemptOutcome::Success, $durationMs, $status, $messageId, responseBody: $body);
             }
 
@@ -38,7 +48,7 @@ final class ResponseClassifier
                 AttemptOutcome::RetryableFailure,
                 $durationMs,
                 $status,
-                error: "Provider answered {$status} without a messageId.",
+                error: "Provider answered {$status} but {$problem}.",
                 responseBody: $body,
             );
         }
@@ -53,6 +63,29 @@ final class ResponseClassifier
             responseBody: $body,
             retryAfter: $this->retryAfter($response),
         );
+    }
+
+    /**
+     * Why a 2xx response is not the documented acceptance, or null if it is.
+     *
+     * @param  array<string, mixed>|null  $body
+     */
+    private function acceptanceProblem(int $status, ?array $body): ?string
+    {
+        if ($status !== self::ACCEPTED) {
+            return 'the expected status is 202 Accepted';
+        }
+
+        $messageId = $body['messageId'] ?? null;
+        if ($body === null || ! is_string($messageId) || $messageId === '') {
+            return 'the response has no messageId';
+        }
+
+        if (array_key_exists('status', $body) && $body['status'] !== 'accepted') {
+            return 'the response status is not "accepted"';
+        }
+
+        return null;
     }
 
     public function connectionFailure(string $message, int $durationMs): DeliveryResult
