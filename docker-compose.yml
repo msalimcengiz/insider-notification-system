@@ -53,6 +53,8 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      mock-provider:
+        condition: service_started
 
   scheduler:
     <<: *php
@@ -62,6 +64,25 @@ services:
     depends_on:
       app:
         condition: service_healthy
+
+  # Stand-in for the external provider (see docker/mock-provider/server.mjs).
+  # Set NOTIFICATION_PROVIDER_URL in .env to use webhook.site instead.
+  mock-provider:
+    image: node:22-alpine
+    command: ["node", "/app/server.mjs"]
+    volumes:
+      - ./docker/mock-provider:/app:ro
+    environment:
+      MOCK_FAILURE_RATE: ${MOCK_FAILURE_RATE:-0.05}
+      MOCK_PERMANENT_FAILURE_RATE: ${MOCK_PERMANENT_FAILURE_RATE:-0.01}
+    ports:
+      - "${MOCK_PROVIDER_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
