@@ -12,6 +12,8 @@
 //   - GET /stats: request counts and the highest number of requests seen in
 //     any one-second window, per channel (to verify rate limiting)
 //   - POST /reset: clears the stats
+//   - POST /config {"failureRate", "permanentFailureRate"}: change the failure
+//     rates at runtime (simulate an outage without losing the stats)
 //
 // No dependencies: plain Node.js.
 
@@ -21,10 +23,12 @@ import { randomUUID } from 'node:crypto';
 const PORT = Number(process.env.PORT ?? 8080);
 const MIN_LATENCY_MS = Number(process.env.MOCK_MIN_LATENCY_MS ?? 20);
 const MAX_LATENCY_MS = Number(process.env.MOCK_MAX_LATENCY_MS ?? 80);
-const FAILURE_RATE = Number(process.env.MOCK_FAILURE_RATE ?? 0.05);
-const PERMANENT_FAILURE_RATE = Number(process.env.MOCK_PERMANENT_FAILURE_RATE ?? 0.01);
+let FAILURE_RATE = Number(process.env.MOCK_FAILURE_RATE ?? 0.05);
+let PERMANENT_FAILURE_RATE = Number(process.env.MOCK_PERMANENT_FAILURE_RATE ?? 0.01);
 const TIMEOUT_MS = 30_000;
 
+// Bounded so long soak tests cannot grow it forever (oldest keys dropped first).
+const MAX_SEEN_KEYS = 100_000;
 const seenKeys = new Map();
 let stats = freshStats();
 
@@ -37,6 +41,9 @@ function channelStats(channel) {
         requests: 0,
         accepted: 0,
         failed: 0,
+        // Accepted requests whose Idempotency-Key was already accepted before:
+        // the same notification delivered twice.
+        duplicates: 0,
         maxPerSecond: 0,
         window: [],
     });
@@ -107,6 +114,13 @@ const server = createServer(async (req, res) => {
         return send(res, 200, { reset: true });
     }
 
+    if (req.method === 'POST' && req.url === '/config') {
+        const body = await readJson(req);
+        if (typeof body?.failureRate === 'number') FAILURE_RATE = body.failureRate;
+        if (typeof body?.permanentFailureRate === 'number') PERMANENT_FAILURE_RATE = body.permanentFailureRate;
+        return send(res, 200, { failureRate: FAILURE_RATE, permanentFailureRate: PERMANENT_FAILURE_RATE });
+    }
+
     if (req.method === 'GET' && req.url === '/health') {
         return send(res, 200, { status: 'ok' });
     }
@@ -149,9 +163,14 @@ const server = createServer(async (req, res) => {
 
     const key = req.headers['idempotency-key'];
     let messageId = key ? seenKeys.get(key) : undefined;
-    if (!messageId) {
+    if (messageId) {
+        channelStats(channel).duplicates++;
+    } else {
         messageId = randomUUID();
-        if (key) seenKeys.set(key, messageId);
+        if (key) {
+            seenKeys.set(key, messageId);
+            if (seenKeys.size > MAX_SEEN_KEYS) seenKeys.delete(seenKeys.keys().next().value);
+        }
     }
 
     track(channel, 'accepted');
