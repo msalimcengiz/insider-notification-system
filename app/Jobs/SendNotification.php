@@ -7,6 +7,7 @@ namespace App\Jobs;
 use App\Actions\DeliverNotification;
 use App\Enums\Channel;
 use App\Jobs\Middleware\CheckCircuitBreaker;
+use App\Jobs\Middleware\SkipUnclaimable;
 use App\Jobs\Middleware\ThrottleChannel;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -42,6 +43,7 @@ final class SendNotification implements ShouldQueue
     public function middleware(): array
     {
         return [
+            new SkipUnclaimable,
             app(CheckCircuitBreaker::class),
             ThrottleChannel::fromConfig(),
         ];
