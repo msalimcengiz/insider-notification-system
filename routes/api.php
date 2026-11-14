@@ -17,7 +17,9 @@ Route::prefix('v1')->group(function (): void {
     Route::post('notifications', [NotificationController::class, 'store']);
     Route::get('notifications/{notification}', [NotificationController::class, 'show']);
     Route::post('notifications/{notification}/cancel', [NotificationController::class, 'cancel']);
+    Route::post('notifications/{notification}/retry', [NotificationController::class, 'retry']);
 
     Route::get('batches/{batch}', [NotificationBatchController::class, 'show']);
     Route::post('batches/{batch}/cancel', [NotificationBatchController::class, 'cancel']);
+    Route::post('batches/{batch}/retry', [NotificationBatchController::class, 'retry']);
 });

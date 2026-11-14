@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Actions\CancelNotification;
 use App\Actions\CreateNotification;
+use App\Actions\RetryFailedNotifications;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AssignCorrelationId;
 use App\Http\Requests\ListNotificationsRequest;
@@ -87,5 +88,17 @@ final class NotificationController extends Controller
     public function cancel(Notification $notification, CancelNotification $cancel): NotificationResource
     {
         return NotificationResource::make($cancel->handle($notification));
+    }
+
+    /**
+     * Retry a failed notification.
+     *
+     * Re-queues a notification that ended in `failed` with a fresh retry
+     * budget; its attempt history is kept. Responds with 409 for any other
+     * status.
+     */
+    public function retry(Notification $notification, RetryFailedNotifications $retry): NotificationResource
+    {
+        return NotificationResource::make($retry->one($notification));
     }
 }

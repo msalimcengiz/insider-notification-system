@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Actions\CancelNotificationBatch;
 use App\Actions\CreateNotificationBatch;
+use App\Actions\RetryFailedNotifications;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AssignCorrelationId;
 use App\Http\Requests\StoreNotificationBatchRequest;
@@ -70,6 +71,21 @@ final class NotificationBatchController extends Controller
 
         return NotificationBatchResource::make($batch)
             ->additional(['meta' => ['cancelled' => $cancelled]])
+            ->response();
+    }
+
+    /**
+     * Retry the failed notifications of a batch.
+     *
+     * Re-queues every `failed` notification of the batch with a fresh retry
+     * budget and reports how many were re-queued.
+     */
+    public function retry(NotificationBatch $batch, RetryFailedNotifications $retry): JsonResponse
+    {
+        $retried = $retry->batch($batch);
+
+        return NotificationBatchResource::make($batch)
+            ->additional(['meta' => ['retried' => $retried]])
             ->response();
     }
 }
