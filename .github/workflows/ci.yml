@@ -81,6 +81,7 @@ jobs:
           DB_DATABASE: notifications_testing
         run: |
           php artisan migrate:fresh --force
+          mkdir -p build
           php artisan scramble:export --path=build/openapi.json
           diff -u openapi.json build/openapi.json || (echo "::error::openapi.json is stale, run: composer docs" && exit 1)
 
