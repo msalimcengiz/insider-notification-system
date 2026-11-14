@@ -8,20 +8,16 @@ x-php: &php
   image: insider-notification-system:dev
   volumes:
     - ./:/var/www/html
-  environment: &php-env
-    DB_HOST: postgres
-    DB_PORT: 5432
-    DB_DATABASE: notifications
-    DB_USERNAME: postgres
-    DB_PASSWORD: postgres
-    REDIS_HOST: redis
+  # Connection settings live in .env (created from .env.example on first
+  # boot). They are deliberately NOT set here: real environment variables take
+  # precedence over phpunit.xml, which would point the test suite at the
+  # development database.
   restart: unless-stopped
 
 services:
   app:
     <<: *php
     environment:
-      <<: *php-env
       CONTAINER_ROLE: app
     depends_on:
       postgres:
@@ -50,7 +46,6 @@ services:
   horizon:
     <<: *php
     environment:
-      <<: *php-env
       CONTAINER_ROLE: horizon
     command: ["php", "artisan", "horizon"]
     stop_signal: SIGTERM
@@ -62,7 +57,6 @@ services:
   scheduler:
     <<: *php
     environment:
-      <<: *php-env
       CONTAINER_ROLE: scheduler
     command: ["php", "artisan", "schedule:work"]
     depends_on:
