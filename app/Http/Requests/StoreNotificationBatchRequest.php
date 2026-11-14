@@ -16,15 +16,38 @@ final class StoreNotificationBatchRequest extends FormRequest
     private array $data = [];
 
     /**
+     * The full request shape. This is what the API documentation shows, and
+     * NotificationItemShape enforces exactly these item rules (parity test).
+     *
      * @return array<string, list<mixed>>
      */
     public function rules(): array
     {
+        return [
+            ...$this->topLevelRules(),
+            ...NotificationPayload::rules('notifications.*.', withItemIdempotencyKey: true),
+        ];
+    }
+
+    /**
+     * What actually runs through Laravel's validator: only the top-level
+     * rules. Expanding `notifications.*.*` for 1000 items costs ~450 ms, so
+     * the items are checked by NotificationItemShape in after() instead.
+     *
+     * @return array<string, list<mixed>>
+     */
+    protected function validationRules(): array
+    {
+        return $this->topLevelRules();
+    }
+
+    /**
+     * @return array<string, list<mixed>>
+     */
+    private function topLevelRules(): array
+    {
         $max = (int) config('notifications.batch.max_size');
 
-        // Item fields are checked by NotificationItemShape in after(): the
-        // same rules as POST /notifications, without the cost of expanding
-        // `notifications.*.*` wildcards for up to 1000 items.
         return [
             'notifications' => ['required', 'array', 'list', 'min:1', "max:{$max}"],
         ];

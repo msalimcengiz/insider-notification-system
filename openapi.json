@@ -1609,7 +1609,65 @@
                     "notifications": {
                         "type": "array",
                         "items": {
-                            "type": "string"
+                            "type": "object",
+                            "properties": {
+                                "channel": {
+                                    "$ref": "#/components/schemas/Channel"
+                                },
+                                "priority": {
+                                    "$ref": "#/components/schemas/Priority"
+                                },
+                                "recipient": {
+                                    "type": "string",
+                                    "maxLength": 320
+                                },
+                                "subject": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+                                "content": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+                                "template": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ],
+                                    "maxLength": 100
+                                },
+                                "variables": {
+                                    "type": [
+                                        "array",
+                                        "null"
+                                    ],
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                },
+                                "scheduled_at": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ],
+                                    "format": "date-time"
+                                },
+                                "idempotency_key": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ],
+                                    "maxLength": 255
+                                }
+                            },
+                            "required": [
+                                "channel",
+                                "recipient"
+                            ]
                         },
                         "minItems": 1,
                         "maxItems": 1000

@@ -78,6 +78,10 @@
         ],
         "format": [
             "pint"
+        ],
+        "docs": [
+            "@php artisan scramble:clear",
+            "@php artisan scramble:export --path=openapi.json"
         ]
     },
     "extra": {

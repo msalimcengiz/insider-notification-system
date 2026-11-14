@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Requests\NotificationItemShape;
 use App\Http\Requests\NotificationPayload;
+use App\Http\Requests\StoreNotificationBatchRequest;
 use Illuminate\Support\Facades\Validator;
 
 /*
@@ -49,4 +50,12 @@ it('validates a 1000-item batch quickly', function (): void {
     $elapsedMs = (hrtime(true) - $startedAt) / 1_000_000;
 
     expect($elapsedMs)->toBeLessThan(100);
+});
+
+it('documents every item field but only runs the top-level rule through the validator', function (): void {
+    $request = new StoreNotificationBatchRequest;
+    $validationRules = (new ReflectionMethod($request, 'validationRules'))->invoke($request);
+
+    expect(array_keys($validationRules))->toBe(['notifications'])
+        ->and(array_keys($request->rules()))->toContain('notifications.*.channel', 'notifications.*.idempotency_key');
 });
