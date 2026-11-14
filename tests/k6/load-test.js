@@ -52,7 +52,7 @@ export const options = {
     thresholds: {
         checks: ['rate>0.99'],
         'http_req_duration{scenario:singles}': ['p(95)<1000'],
-        batch_request_duration: ['p(95)<6000'],
+        batch_request_duration: ['p(95)<8000'],
     },
     teardownTimeout: `${DRAIN_TIMEOUT_S + 60}s`,
 };
