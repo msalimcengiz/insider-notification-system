@@ -62,6 +62,8 @@ That one command builds the image, installs dependencies, creates `.env`, runs m
 
 Requirements: Docker with Docker Compose. Nothing else is needed on the host.
 
+The source is bind-mounted into the containers. On macOS, clone into a folder Docker Desktop shares (anything under `/Users` is shared by default; `/tmp` is not).
+
 ```bash
 git clone https://github.com/msalimcengiz/insider-notification-system.git
 cd insider-notification-system
