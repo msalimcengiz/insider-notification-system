@@ -7,7 +7,7 @@ An event-driven notification service that accepts **SMS**, **email** and **push*
 **Stack:** PHP 8.4, Laravel 13, PostgreSQL 16, Redis 7, Laravel Horizon, Laravel Reverb, Docker Compose.
 
 ```bash
-docker compose up
+docker-compose up
 ```
 
 That one command builds the image, installs dependencies, creates `.env`, runs migrations and starts every service.
@@ -47,7 +47,7 @@ That one command builds the image, installs dependencies, creates `.env`, runs m
 | Metrics endpoint | `GET /api/v1/metrics`: queue depth, success / failure rates, latency p50/p95/p99, throughput, circuit state |
 | Structured logs with correlation IDs | JSON logs; `X-Correlation-ID` follows a notification from the API to the worker and the provider call |
 | Health check | `GET /api/v1/health`: PostgreSQL, Redis, Horizon, circuits (`ok` / `degraded` / `down`) |
-| webhook.site provider | Exact request format, `202` + `messageId`, configurable URL (a mock provider is bundled) |
+| webhook.site provider | Default provider: a webhook.site URL answering `202` + `messageId`; exact request format; only `202 Accepted` with a `messageId` counts as delivered |
 | **Bonus:** failure handling | Circuit breaker, recovery sweeper, failed list (`?status=failed`), manual retry with a fresh budget |
 | **Bonus:** scheduled notifications | `scheduled_at` (≤ 30 days ahead), dispatched every 10 s, cancellable until then |
 | **Bonus:** templates | `/api/v1/templates` CRUD and preview, `{{ variable }}` substitution |
@@ -67,7 +67,7 @@ The source is bind-mounted into the containers. On macOS, clone into a folder Do
 ```bash
 git clone https://github.com/msalimcengiz/insider-notification-system.git
 cd insider-notification-system
-docker compose up        # first boot takes a minute: composer install + migrations
+docker-compose up        # first boot takes a minute: composer install + migrations
 ```
 
 | Service | URL |
@@ -77,27 +77,34 @@ docker compose up        # first boot takes a minute: composer install + migrati
 | Horizon (queues dashboard) | http://localhost:8000/horizon |
 | WebSocket demo | http://localhost:8000/ws-demo.html |
 | WebSocket server (Reverb) | ws://localhost:8080 |
-| Mock provider stats | http://localhost:8081/stats |
+| Provider (webhook.site) | https://webhook.site/#!/view/d578e70a-82cf-4fb9-9762-938e0c61d818 |
 
 Seed a few ready-to-use templates:
 
 ```bash
-docker compose exec app php artisan db:seed
+docker-compose exec app php artisan db:seed
 ```
 
-### Using webhook.site instead of the mock provider
+### Notification provider: webhook.site
 
-By default deliveries go to the bundled mock provider, so the stack works offline and under load. To use [webhook.site](https://webhook.site):
+As the assessment specifies, notifications are delivered to [webhook.site](https://webhook.site). `.env.example` points to a URL whose response is configured as the document describes:
 
-1. Create a URL there. Under *Edit*, set the default response to status **202**, content type `application/json`, and a body such as:
-   ```json
-   { "messageId": "6f1c2c1e-3d1a-4f7b-9a59-0c8f0e2b5a11", "status": "accepted", "timestamp": "2026-11-14T12:00:00Z" }
-   ```
-   Any non-empty `messageId` counts as accepted. webhook.site returns the same body for every request.
-2. Put it in `.env`: `NOTIFICATION_PROVIDER_URL=https://webhook.site/<your-uuid>`. You can also set it per channel with `NOTIFICATION_PROVIDER_SMS_URL`, `..._EMAIL_URL` and `..._PUSH_URL`.
-3. Restart the workers: `docker compose restart horizon`.
+```
+202 Accepted
+Content-Type: application/json
+{"messageId": "6f1c2c1e-3d1a-4f7b-9a59-0c8f0e2b5a11", "status": "accepted", "timestamp": "2026-11-14T12:00:00Z"}
+```
 
-webhook.site's free tier limits the number of requests, so use the mock provider for load tests.
+Incoming requests can be watched live at https://webhook.site/#!/view/d578e70a-82cf-4fb9-9762-938e0c61d818.
+
+To use your own URL:
+1. Create one on webhook.site. Under *Edit*, set **Default status code** `202`, **Content type** `application/json`, and the body above as **Response body**. webhook.site returns the same body for every request, so a fixed `messageId` is fine.
+2. Set `NOTIFICATION_PROVIDER_URL=https://webhook.site/<your-uuid>` in `.env`. You can also set it per channel with `NOTIFICATION_PROVIDER_SMS_URL`, `..._EMAIL_URL` and `..._PUSH_URL`.
+3. Restart the workers: `docker-compose restart horizon`.
+
+Only `202` with a `messageId` (and `status: "accepted"` when present) counts as delivered. Any other answer is retried. An unconfigured webhook.site URL answers `200` with HTML, so its notifications stay `retrying` with the error *"Provider answered 200 but the expected status is 202 Accepted"*.
+
+webhook.site's free tier limits the number of requests and URLs expire after a while. For load and failure tests, a local stand-in is included: see [Failure scenarios](#failure-scenarios-local-mock-provider) and [Load test](#load-test).
 
 **Verified against webhook.site.** With `NOTIFICATION_PROVIDER_URL` pointing to a webhook.site URL configured as above, a run covered:
 - an SMS with high priority
@@ -109,7 +116,7 @@ Results:
 - Each was accepted with `202` in ~220-240 ms per call.
 - webhook.site received exactly the documented body (`{"to", "channel", "content"}`) plus the `Idempotency-Key` and `X-Correlation-ID` headers.
 - Repeating the SMS request with the same `Idempotency-Key` returned `200` and caused no second provider call.
-- Before the response was configured, webhook.site answered `200` with HTML. The system classified that as *not accepted* ("Provider answered 200 without a messageId") and scheduled a retry instead of marking the notification as sent.
+- Before the response was configured, webhook.site answered `200` with HTML. The system treated that as *not accepted* and scheduled a retry instead of marking the notification as sent.
 
 ---
 
@@ -239,9 +246,17 @@ const pusher = new Pusher('local-notifications-key', { wsHost: 'localhost', wsPo
 pusher.subscribe(`batches.${batchId}`).bind('notification.status', (e) => console.log(e.id, e.status));
 ```
 
-### Testing failure paths by hand
+### Failure scenarios (local mock provider)
 
-The mock provider fails on purpose when the content contains a marker:
+webhook.site always returns the same response, so it cannot exercise retries, permanent failures or the circuit breaker. For that, the repository includes a small local stand-in with the same contract ([`docker/mock-provider/server.mjs`](docker/mock-provider/server.mjs)). It is **not** started by `docker-compose up`. To switch to it:
+
+```bash
+docker-compose --profile mock up -d mock-provider
+# in .env: NOTIFICATION_PROVIDER_URL=http://mock-provider:8080/
+docker-compose restart horizon
+```
+
+It answers like the configured webhook.site URL, with 20-80 ms latency and 5 % random 503s / 1 % random 400s. It also fails on purpose when the content contains a marker:
 
 | Marker | Provider answers | System behaviour |
 |---|---|---|
@@ -250,7 +265,7 @@ The mock provider fails on purpose when the content contains a marker:
 | `[mock:400]` | 400 | `failed` at once (permanent) |
 | `[mock:timeout]` | no answer for 30 s | times out after 5 s, retried |
 
-To simulate an outage of every channel, run `MOCK_FAILURE_RATE=1 docker compose up -d mock-provider`. Watch the circuits open in `/metrics` and `/health`. To restore it, run `docker compose up -d mock-provider`.
+To simulate an outage of every channel, run `MOCK_FAILURE_RATE=1 docker-compose --profile mock up -d mock-provider`. Watch the circuits open in `/metrics` and `/health`. To restore it, run `docker-compose --profile mock up -d mock-provider`. Request counts per channel are at http://localhost:8081/stats. Set `NOTIFICATION_PROVIDER_URL` back to the webhook.site URL when done.
 
 ---
 
@@ -272,7 +287,7 @@ flowchart LR
 
     redis --> sms & email & push
     sms & email & push -->|claim · record| pg
-    sms & email & push -->|POST to, channel, content| provider[[Provider<br/>webhook.site / mock]]
+    sms & email & push -->|POST to, channel, content| provider[[webhook.site]]
     sms & email & push -->|status event| bc --> reverb[Reverb<br/>WebSocket] --> client
 
     scheduler[Scheduler] -->|due scheduled, stuck rows| pg
@@ -289,7 +304,7 @@ flowchart LR
 
    Then the worker **claims** the row atomically (`queued|retrying → processing`), calls the provider, and records the attempt and the new status in one transaction.
 4. **Outcome.**
-   - `sent`: a 2xx response with a `messageId`.
+   - `sent`: `202 Accepted` with a `messageId`, as the provider contract specifies.
    - `retrying`: a transient error with retry budget left. The job is released with a backoff delay.
    - `failed`: a permanent error, or the retry budget is exhausted.
 
@@ -304,7 +319,7 @@ stateDiagram-v2
     scheduled --> queued: due (scheduler)
     pending --> queued: dispatcher
     queued --> processing: worker claim
-    processing --> sent: 2xx + messageId
+    processing --> sent: 202 + messageId
     processing --> retrying: transient error, budget left
     processing --> failed: permanent error / budget exhausted
     retrying --> processing: backoff elapsed
@@ -359,8 +374,8 @@ The [`ThrottleChannel`](app/Jobs/Middleware/ThrottleChannel.php) middleware **wa
 
 | Provider result | Outcome |
 |---|---|
-| 2xx with `messageId` | success |
-| 2xx without a usable `messageId` | retryable (acceptance not proven) |
+| `202` with `messageId` (and `status: "accepted"` when present) | success, the documented acceptance |
+| any other 2xx, or a `202` without a usable `messageId` | retryable (acceptance not proven) |
 | 408, 425, 429, 5xx, timeout, connection error | retryable |
 | any other 4xx | permanent: `failed` immediately |
 
@@ -436,7 +451,7 @@ All settings are environment variables; defaults are in [`config/notifications.p
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `NOTIFICATION_PROVIDER_URL` | `http://mock-provider:8080/` | Provider endpoint (all channels) |
+| `NOTIFICATION_PROVIDER_URL` | the webhook.site URL above | Provider endpoint (all channels) |
 | `NOTIFICATION_PROVIDER_{SMS,EMAIL,PUSH}_URL` | – | Per-channel override |
 | `NOTIFICATION_PROVIDER_TIMEOUT` | `5` | Seconds per provider call |
 | `NOTIFICATIONS_RATE_LIMIT_PER_SECOND` | `100` | Calls per window per channel |
@@ -450,16 +465,16 @@ All settings are environment variables; defaults are in [`config/notifications.p
 | `NOTIFICATIONS_MAX_SCHEDULE_DAYS` | `30` | How far ahead `scheduled_at` may be |
 | `NOTIFICATIONS_RECOVER_*` | see config | Age thresholds of the recovery sweeper |
 
-With the mock's ~50 ms latency, each worker makes ~20 calls/s. Four workers per channel (~80/s) are enough for local use. Use 6-12 to saturate the 100/s limit.
+Four workers per channel are plenty for webhook.site. With the local mock's ~50 ms latency, each worker makes ~20 calls/s, so use 6-12 workers per channel to saturate the 100/s limit in a load test.
 
 ---
 
 ## Testing
 
 ```bash
-docker compose exec app php artisan test          # 249 tests, ~10 s
-docker compose exec app composer lint             # Pint (check) + Larastan level 8
-docker compose exec app composer docs             # regenerate openapi.json
+docker-compose exec app php artisan test          # 258 tests, ~10 s
+docker-compose exec app composer lint             # Pint (check) + Larastan level 8
+docker-compose exec app composer docs             # regenerate openapi.json
 ```
 
 - **Unit:** state machine, queue naming, SMS segment calculation, template rendering, retry policy, response classification, histogram quantiles, Horizon supervisor layout.
@@ -477,11 +492,20 @@ On `main`, it also builds the production image (`docker/php/Dockerfile`, `prod` 
 
 ## Load test
 
+The load test must not go to webhook.site: its free tier cannot take 20 000 requests. Switch the workers to the local mock provider first. The script refuses to start otherwise: it sends one probe notification and aborts if the probe never reaches the mock.
+
 ```bash
-NOTIFICATIONS_SMS_WORKERS=12 NOTIFICATIONS_EMAIL_WORKERS=12 NOTIFICATIONS_PUSH_WORKERS=12   # put these in .env
-docker compose restart horizon
-docker compose --profile loadtest run --rm k6
+# in .env:
+#   NOTIFICATION_PROVIDER_URL=http://mock-provider:8080/
+#   NOTIFICATIONS_SMS_WORKERS=12
+#   NOTIFICATIONS_EMAIL_WORKERS=12
+#   NOTIFICATIONS_PUSH_WORKERS=12
+docker-compose --profile loadtest up -d mock-provider
+docker-compose restart horizon
+docker-compose --profile loadtest run --rm k6
 ```
+
+Afterwards, restore `NOTIFICATION_PROVIDER_URL` to the webhook.site URL and run `docker-compose restart horizon`.
 
 [`tests/k6/load-test.js`](tests/k6/load-test.js) simulates a flash sale:
 - **20 batch requests × 1000 notifications** from 5 parallel clients, with mixed channels and priorities

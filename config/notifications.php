@@ -47,15 +47,15 @@ return [
     | Delivery provider
     |--------------------------------------------------------------------------
     |
-    | Every channel posts {"to", "channel", "content"} to an HTTP endpoint and
-    | expects 202 {"messageId", "status": "accepted", "timestamp"}. By default
-    | all channels use the bundled mock provider; point them at your own
-    | https://webhook.site URL (or per channel) through the environment.
+    | As the assessment specifies, notifications go to webhook.site: every
+    | channel posts {"to", "channel", "content"} and expects
+    | 202 {"messageId", "status": "accepted", "timestamp"}. The URL can be
+    | overridden globally or per channel through the environment.
     |
     */
 
     'provider' => [
-        'url' => env('NOTIFICATION_PROVIDER_URL', 'http://mock-provider:8080/'),
+        'url' => env('NOTIFICATION_PROVIDER_URL', 'https://webhook.site/d578e70a-82cf-4fb9-9762-938e0c61d818'),
         'channels' => [
             'sms' => ['url' => env('NOTIFICATION_PROVIDER_SMS_URL')],
             'email' => ['url' => env('NOTIFICATION_PROVIDER_EMAIL_URL')],

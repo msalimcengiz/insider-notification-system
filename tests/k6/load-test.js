@@ -1,6 +1,14 @@
 // k6 load test: burst traffic through the public API.
 //
-//   docker compose --profile loadtest run --rm k6
+// The stack delivers to webhook.site by default, whose free tier cannot take
+// 20 000 requests. Point the workers at the local mock provider first:
+//
+//   NOTIFICATION_PROVIDER_URL=http://mock-provider:8080/   (in .env)
+//   docker-compose --profile loadtest up -d mock-provider
+//   docker-compose restart horizon
+//   docker-compose --profile loadtest run --rm k6
+//
+// setup() refuses to run if the workers are not using the mock provider.
 //
 // Scenarios (run in parallel):
 //   batches  - 20 batch requests x 1000 notifications (mixed channels and
@@ -13,6 +21,7 @@
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
 
 const API = __ENV.API_URL || 'http://nginx/api/v1';
@@ -73,8 +82,32 @@ function notification(i) {
 }
 
 export function setup() {
+    assertWorkersUseMockProvider();
     http.post(`${PROVIDER}/reset`);
     return { startedAt: Date.now() };
+}
+
+// Sends one probe notification and waits for it to reach the mock provider.
+function assertWorkersUseMockProvider() {
+    const before = totalRequests();
+    const probe = http.post(`${API}/notifications`, JSON.stringify(notification(0)), { headers });
+
+    for (let i = 0; i < 20; i++) {
+        sleep(0.5);
+        if (totalRequests() > before) return;
+    }
+
+    exec.test.abort(
+        `The probe notification (${probe.json('data.id')}) never reached the mock provider: the workers are ` +
+        'probably delivering to webhook.site. Set NOTIFICATION_PROVIDER_URL=http://mock-provider:8080/ in .env ' +
+        'and run `docker-compose restart horizon` before load testing.',
+    );
+}
+
+function totalRequests() {
+    const res = http.get(`${PROVIDER}/stats`);
+    if (res.status !== 200) return -1;
+    return Object.values(res.json('channels')).reduce((sum, c) => sum + c.requests, 0);
 }
 
 export function sendBatch() {

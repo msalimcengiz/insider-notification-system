@@ -53,8 +53,6 @@ services:
     depends_on:
       app:
         condition: service_healthy
-      mock-provider:
-        condition: service_started
 
   scheduler:
     <<: *php
@@ -77,10 +75,12 @@ services:
       app:
         condition: service_healthy
 
-  # Stand-in for the external provider (see docker/mock-provider/server.mjs).
-  # Set NOTIFICATION_PROVIDER_URL in .env to use webhook.site instead.
+  # Optional local stand-in for webhook.site, for load and failure testing
+  # only (webhook.site's free tier limits requests). Not started by
+  # `docker-compose up`; see README, "Load test" and "Failure scenarios".
   mock-provider:
     image: node:22-alpine
+    profiles: ["mock", "loadtest"]
     command: ["node", "/app/server.mjs"]
     volumes:
       - ./docker/mock-provider:/app:ro
