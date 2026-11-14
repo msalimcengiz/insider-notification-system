@@ -22,9 +22,11 @@ final class StoreNotificationBatchRequest extends FormRequest
     {
         $max = (int) config('notifications.batch.max_size');
 
+        // Item fields are checked by NotificationItemShape in after(): the
+        // same rules as POST /notifications, without the cost of expanding
+        // `notifications.*.*` wildcards for up to 1000 items.
         return [
             'notifications' => ['required', 'array', 'list', 'min:1', "max:{$max}"],
-            ...NotificationPayload::rules('notifications.*.', withItemIdempotencyKey: true),
         ];
     }
 
@@ -41,6 +43,20 @@ final class StoreNotificationBatchRequest extends FormRequest
 
                 $items = $this->input('notifications');
                 $items = is_array($items) ? $items : [];
+
+                foreach ($items as $index => $item) {
+                    $prefix = "notifications.{$index}.";
+
+                    if (! is_array($item)) {
+                        $validator->errors()->add("notifications.{$index}", "The notifications.{$index} field must be an object.");
+
+                        continue;
+                    }
+
+                    foreach (NotificationItemShape::errors($item, $prefix, withItemIdempotencyKey: true) as $field => $message) {
+                        $validator->errors()->add($prefix.$field, $message);
+                    }
+                }
 
                 $this->data = array_values($payload->parse(
                     $validator,
