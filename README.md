@@ -24,6 +24,7 @@ That one command builds the image, installs dependencies, creates `.env`, runs m
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Load test](#load-test)
+- [Running for months](#running-for-months)
 - [Project structure](#project-structure)
 - [Trade-offs and next steps](#trade-offs-and-next-steps)
 
@@ -501,6 +502,7 @@ All settings are environment variables; defaults are in [`config/notifications.p
 | `NOTIFICATIONS_SMS_MAX_SEGMENTS` | `10` | SMS length limit |
 | `NOTIFICATIONS_MAX_SCHEDULE_DAYS` | `30` | How far ahead `scheduled_at` may be |
 | `NOTIFICATIONS_RECOVER_*` | see config | Age thresholds of the recovery sweeper |
+| `NOTIFICATIONS_RETENTION_DAYS` | `30` | Finished notifications (and their attempts) older than this are deleted nightly |
 | `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Share of new traces that are recorded (parent-based ratio) |
 | `OTEL_SDK_DISABLED` | `false` | Set to `true` to turn tracing off |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://jaeger:4318` | Where spans are sent (any OTLP backend: Jaeger, Tempo, Honeycomb…) |
@@ -512,7 +514,7 @@ Four workers per channel are plenty for webhook.site. With the local mock's ~50 
 ## Testing
 
 ```bash
-docker-compose exec app php artisan test          # 269 tests, ~12 s
+docker-compose exec app php artisan test          # 278 tests, ~15 s
 docker-compose exec app composer lint             # Pint (check) + Larastan level 8
 docker-compose exec app composer docs             # regenerate openapi.json
 ```
@@ -570,6 +572,57 @@ How to read the results:
 - **Throughput is the rate limit, by design.** About 7 000 notifications per channel at 100/s is ~70 s of sending. The median end-to-end latency (~45 s) is mostly time spent waiting in the queue behind the burst.
 - **API latency under load is CPU contention.** 36 worker processes share 4 vCPUs with php-fpm, PostgreSQL and Redis. In production the API and the workers scale on separate nodes, and an idle 1000-item batch takes ~0.4 s.
 - **Running real traffic found three real issues, all fixed:** the validator cost on batches ([decision 8](#8-batch-performance)), Horizon starting `(min+max)/2` workers instead of the configured count (now `min = max`), and the mock provider measuring rate at response time instead of on arrival.
+
+---
+
+## Running for months
+
+The service is meant to run unattended for months. That needs more than correct logic: no memory growth, nothing left spinning, bounded data, and recovery from every dependency failure without a person stepping in. All of this is covered by automated tests and a soak test.
+
+### What keeps it bounded
+
+| Risk over months | Safeguard |
+|---|---|
+| Memory growth in long-running workers | Horizon recycles each worker after 10 000 jobs or 1 h, and above 128 MB. A test runs 1 500 jobs in one process and fails above 2 MB of growth (it catches a deliberate 2 KB-per-job leak). |
+| Memory growth in php-fpm | `pm.max_requests = 1000`. |
+| Requests stuck on a hung socket | `request_terminate_timeout = 65s` (`max_execution_time` only counts CPU time). |
+| Tables growing forever | A nightly `model:prune` deletes finished notifications older than `NOTIFICATIONS_RETENTION_DAYS` (30). Their attempts go with them (ON DELETE CASCADE), and empty batches are deleted too. Notifications still in progress are never pruned. `queue:prune-failed` runs nightly as well. |
+| Redis growing forever | Every key has a TTL: rate limit windows, circuit state, metric buckets (3 h) and Horizon job records (15 min for completed jobs). |
+| Logs filling the disk | Every container is capped at 5 × 10 MB of logs. |
+| Trace storage growing forever | Jaeger keeps the newest 5 000 traces. A long-lived deployment points `OTEL_EXPORTER_OTLP_ENDPOINT` at a persistent backend and lowers the sampling ratio. |
+| A crashed scheduler blocking scheduled work for a day | Overlap locks expire after 2-5 min instead of Laravel's default 24 h. |
+| Trace collector down slowing delivery | Export timeout 500 ms. After a failed or slow export a worker stops exporting for 60 s. Measured with Jaeger stopped, 300 SMS took 12.7 s instead of 113 s before the fix (7 s with Jaeger up). |
+| Lost or stuck work after crashes | Atomic claims, the recovery sweeper, and PostgreSQL as the source of truth (see [decision 1](#1-postgresql-is-the-source-of-truth-redis-is-the-transport)). |
+
+### Soak test
+
+[`tests/soak/run.sh`](tests/soak/run.sh) drives steady mixed traffic with k6 for 12 minutes: 40 single requests/s plus a 200-item batch every 5 s, about 80 notifications/s. While it runs, it does two more things:
+- **Samples** resources every 30 s: per-process memory from `/proc`, container memory and CPU, Redis memory and keys, PostgreSQL connections, and in-flight notifications.
+- **Injects failures** on a fixed timeline: `kill -9` of a worker in the middle of a job, a Redis restart, a 60 s provider outage, Jaeger stopped for 60 s, a Horizon restart, and `kill -9` of the scheduler.
+
+It then waits for the queues to drain and samples an idle period. [`tests/soak/report.py`](tests/soak/report.py) checks the outcome against PostgreSQL and the provider's own counters.
+
+```bash
+# provider → mock (NOTIFICATION_PROVIDER_URL=http://mock-provider:8080/ in .env), then:
+docker-compose --profile mock up -d mock-provider && docker-compose restart horizon
+tests/soak/run.sh 12 storage/soak
+python3 tests/soak/report.py storage/soak
+```
+
+Result of the last run (4 workers per channel, same laptop as the load test):
+
+| Check | Result |
+|---|---|
+| Notifications | 56 749 created, 100 % of 27 894 requests accepted |
+| Stuck after all six failures | **0** in pending / queued / processing / retrying; drained 69 s after the load stopped |
+| Failed | 617, all of them the mock's deliberate 1 % permanent `400` answers; no failure was caused by the injected faults |
+| Delivered exactly once | 56 132 unique accepted messages for 56 132 `sent`. The 4 repeated requests came from workers killed mid-call and were deduplicated by the provider through `Idempotency-Key` (at-least-once delivery, deduplicated at the provider). |
+| Attempt history | 59 750 attempts recorded, matching the `attempts` counters exactly; no notification recorded as accepted twice |
+| Worker memory | 60-78 MB per process, flat over the run (limit 128 MB); php-fpm 50-52 MB; scheduler 60 MB, flat |
+| PostgreSQL connections | at most 30 |
+| Idle after the run | Horizon 5 % CPU, API 1.6 %, scheduler 1.3 %: nothing left spinning |
+
+The first soak run found two settings that were bounded but too generous: Horizon kept job records for 60 min (~330 MB of Redis at 80 jobs/s), and Jaeger kept 20 000 traces (1.2 GB). Both were lowered to the values above.
 
 ---
 
