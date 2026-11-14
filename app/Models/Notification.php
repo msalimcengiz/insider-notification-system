@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * @property string $id
  * @property string|null $batch_id
+ * @property int|null $batch_position
  * @property string|null $template_id
  * @property Channel $channel
  * @property Priority $priority
@@ -66,6 +67,7 @@ class Notification extends Model
             'priority' => Priority::class,
             'status' => NotificationStatus::class,
             'template_variables' => 'array',
+            'batch_position' => 'integer',
             'attempts' => 'integer',
             'scheduled_at' => 'immutable_datetime',
             'queued_at' => 'immutable_datetime',
