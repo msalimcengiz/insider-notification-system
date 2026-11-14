@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Exceptions\IdempotencyKeyConflict;
 use App\Http\Middleware\AssignCorrelationId;
+use App\Http\Middleware\LogRequest;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -20,6 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->api(prepend: [
             AssignCorrelationId::class,
+            LogRequest::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
