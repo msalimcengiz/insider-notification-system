@@ -7,8 +7,10 @@ namespace App\Models;
 use App\Enums\NotificationStatus;
 use Carbon\CarbonImmutable;
 use Database\Factories\NotificationBatchFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -26,6 +28,7 @@ class NotificationBatch extends Model
     use HasFactory;
 
     use HasUuids;
+    use MassPrunable;
 
     protected $guarded = ['id'];
 
@@ -36,6 +39,18 @@ class NotificationBatch extends Model
             'created_at' => 'immutable_datetime',
             'updated_at' => 'immutable_datetime',
         ];
+    }
+
+    /**
+     * Batches whose notifications have all been pruned.
+     *
+     * @return Builder<self>
+     */
+    public function prunable(): Builder
+    {
+        return self::query()
+            ->where('created_at', '<', now()->subDays((int) config('notifications.retention_days')))
+            ->whereDoesntHave('notifications');
     }
 
     /**

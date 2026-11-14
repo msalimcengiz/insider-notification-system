@@ -28,9 +28,19 @@ final class Tracing
 {
     private const int FLUSH_INTERVAL_SECONDS = 2;
 
+    /** After a failed or slow export (collector down), stop flushing from the worker loop for this long. */
+    private const int FLUSH_BACKOFF_SECONDS = 60;
+
+    /**
+     * A healthy OTLP export takes a few milliseconds. The SDK reports success
+     * even when every retry failed, so a slow export is the reliable sign
+     * that the collector is unreachable.
+     */
+    private const float SLOW_EXPORT_SECONDS = 0.25;
+
     private readonly TracerInterface $tracer;
 
-    private float $lastFlushAt = 0.0;
+    private float $nextFlushAt = 0.0;
 
     public function __construct(
         private readonly TracerProviderInterface $tracerProvider,
@@ -77,20 +87,23 @@ final class Tracing
      * Exports buffered spans if the last export is a while ago. Long-running
      * workers call this after each job so the spans of a lone job show up
      * right away instead of waiting for the next batch.
+     *
+     * Tracing must never slow delivery down: when an export fails (the
+     * collector is down) the worker stops flushing for a minute, and the
+     * exporter's own timeout is kept short (OTEL_EXPORTER_OTLP_TIMEOUT).
      */
     public function flushIfDue(): void
     {
         $now = microtime(true);
 
-        if ($now - $this->lastFlushAt < self::FLUSH_INTERVAL_SECONDS) {
+        if ($now < $this->nextFlushAt || ! method_exists($this->tracerProvider, 'forceFlush')) {
             return;
         }
 
-        $this->lastFlushAt = $now;
+        $exported = (bool) $this->tracerProvider->forceFlush();
+        $healthy = $exported && microtime(true) - $now < self::SLOW_EXPORT_SECONDS;
 
-        if (method_exists($this->tracerProvider, 'forceFlush')) {
-            $this->tracerProvider->forceFlush();
-        }
+        $this->nextFlushAt = $now + ($healthy ? self::FLUSH_INTERVAL_SECONDS : self::FLUSH_BACKOFF_SECONDS);
     }
 
     /**

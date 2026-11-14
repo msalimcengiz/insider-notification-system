@@ -12,6 +12,7 @@ use Database\Factories\NotificationFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -52,6 +53,7 @@ class Notification extends Model
     use HasFactory;
 
     use HasUuids;
+    use MassPrunable;
 
     protected $guarded = ['id'];
 
@@ -106,6 +108,19 @@ class Notification extends Model
     public function deliveryAttempts(): HasMany
     {
         return $this->hasMany(NotificationAttempt::class)->orderBy('attempt_number');
+    }
+
+    /**
+     * Finished notifications older than the retention period (daily
+     * `model:prune`). Their attempts go with them (ON DELETE CASCADE).
+     *
+     * @return Builder<self>
+     */
+    public function prunable(): Builder
+    {
+        return self::query()
+            ->inStatus([NotificationStatus::Sent, NotificationStatus::Failed, NotificationStatus::Cancelled])
+            ->where('updated_at', '<', now()->subDays((int) config('notifications.retention_days')));
     }
 
     public function queueName(): string

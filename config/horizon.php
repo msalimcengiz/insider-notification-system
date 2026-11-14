@@ -114,10 +114,13 @@ return [
     |
     */
 
+    // Horizon keeps a Redis hash per job for the dashboard. At ~80 jobs/s an
+    // hour of completed jobs is ~330 MB (measured in the soak test); 15
+    // minutes keeps the dashboard useful at a quarter of the memory.
     'trim' => [
-        'recent' => 60,
+        'recent' => 15,
         'pending' => 60,
-        'completed' => 60,
+        'completed' => 15,
         'recent_failed' => 10080,
         'failed' => 10080,
         'monitored' => 10080,
@@ -214,6 +217,10 @@ return [
             'tries' => 0,
             'timeout' => 60,
             'memory' => 128,
+            // Recycle workers regularly (and above 128 MB): a slow leak in any
+            // dependency can never accumulate over months of uptime.
+            'maxJobs' => 10000,
+            'maxTime' => 3600,
         ],
         'notifications-email' => [
             'connection' => 'redis',
@@ -224,6 +231,10 @@ return [
             'tries' => 0,
             'timeout' => 60,
             'memory' => 128,
+            // Recycle workers regularly (and above 128 MB): a slow leak in any
+            // dependency can never accumulate over months of uptime.
+            'maxJobs' => 10000,
+            'maxTime' => 3600,
         ],
         'notifications-push' => [
             'connection' => 'redis',
@@ -234,6 +245,10 @@ return [
             'tries' => 0,
             'timeout' => 60,
             'memory' => 128,
+            // Recycle workers regularly (and above 128 MB): a slow leak in any
+            // dependency can never accumulate over months of uptime.
+            'maxJobs' => 10000,
+            'maxTime' => 3600,
         ],
         // WebSocket broadcasts and everything else, kept away from delivery.
         'default' => [
@@ -245,6 +260,10 @@ return [
             'tries' => 3,
             'timeout' => 60,
             'memory' => 128,
+            // Recycle workers regularly (and above 128 MB): a slow leak in any
+            // dependency can never accumulate over months of uptime.
+            'maxJobs' => 10000,
+            'maxTime' => 3600,
         ],
     ],
 

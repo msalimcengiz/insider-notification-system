@@ -149,4 +149,18 @@ return [
         'max_per_run' => (int) env('NOTIFICATIONS_RECOVER_MAX_PER_RUN', 5000),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Retention
+    |--------------------------------------------------------------------------
+    |
+    | Finished notifications (sent, failed, cancelled) and their attempt
+    | history are deleted after this many days by the daily `model:prune`
+    | run, so the tables stay bounded on a server that runs for months.
+    | Notifications still in progress are never pruned.
+    |
+    */
+
+    'retention_days' => (int) env('NOTIFICATIONS_RETENTION_DAYS', 30),
+
 ];
