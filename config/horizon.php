@@ -235,12 +235,13 @@ return [
             'timeout' => 60,
             'memory' => 128,
         ],
-        // Everything else (broadcasts, housekeeping).
+        // WebSocket broadcasts and everything else, kept away from delivery.
         'default' => [
             'connection' => 'redis',
-            'queue' => ['default'],
+            'queue' => ['broadcasts', 'default'],
             'balance' => 'simple',
-            'processes' => 1,
+            'minProcesses' => 2,
+            'maxProcesses' => 2,
             'tries' => 3,
             'timeout' => 60,
             'memory' => 128,

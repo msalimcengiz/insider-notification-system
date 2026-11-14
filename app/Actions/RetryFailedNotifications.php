@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Actions;
 
 use App\Enums\NotificationStatus;
+use App\Events\NotificationStatusChanged;
 use App\Exceptions\NotificationNotRetryable;
 use App\Models\Notification;
 use App\Models\NotificationBatch;
@@ -34,7 +35,9 @@ final readonly class RetryFailedNotifications
 
         // Conditional on `failed`: a concurrent retry of the same
         // notification simply finds nothing left to do.
-        $this->retry([$notification->id]);
+        if ($this->retry([$notification->id]) > 0) {
+            event(NotificationStatusChanged::from($notification->refresh()));
+        }
 
         return $notification->refresh();
     }

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Notification status stream</title>
+    <style>
+        :root { color-scheme: light dark; --border: #8884; }
+        body { font: 14px/1.5 system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+        form { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+        select, input, button { font: inherit; padding: .4rem .6rem; }
+        input { flex: 1; min-width: 18rem; }
+        #log { border: 1px solid var(--border); border-radius: 6px; padding: .5rem; min-height: 12rem; }
+        .event { font-family: ui-monospace, monospace; font-size: 12px; padding: .25rem 0; border-bottom: 1px dashed var(--border); white-space: pre-wrap; }
+        .sent { color: #2a9d4b; } .failed { color: #d33; } .retrying { color: #c80; } .cancelled { color: #888; }
+        code { background: #8882; padding: 0 .3em; border-radius: 3px; }
+    </style>
+</head>
+<body>
+<h1>Notification status stream</h1>
+<p>
+    Subscribes to the Reverb WebSocket server and prints every
+    <code>notification.status</code> event for a notification or a whole batch.
+    Paste an ID returned by <code>POST /api/v1/notifications</code> or
+    <code>POST /api/v1/notifications/batch</code>.
+</p>
+
+<form id="subscribe">
+    <select id="type">
+        <option value="batches">Batch</option>
+        <option value="notifications">Notification</option>
+    </select>
+    <input id="id" placeholder="UUID" required pattern="[0-9a-fA-F-]{36}">
+    <button>Subscribe</button>
+</form>
+
+<div id="status">Connecting…</div>
+<div id="log"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/pusher-js@8.4.0/dist/web/pusher.min.js"></script>
+<script>
+    // Development credentials from .env.example.
+    const pusher = new Pusher('local-notifications-key', {
+        wsHost: location.hostname,
+        wsPort: 8080,
+        forceTLS: false,
+        enabledTransports: ['ws'],
+        cluster: '',
+    });
+
+    const status = document.getElementById('status');
+    const log = document.getElementById('log');
+    pusher.connection.bind('state_change', ({ current }) => { status.textContent = `WebSocket: ${current}`; });
+
+    let channel = null;
+    document.getElementById('subscribe').addEventListener('submit', (event) => {
+        event.preventDefault();
+        if (channel) pusher.unsubscribe(channel.name);
+
+        const name = `${document.getElementById('type').value}.${document.getElementById('id').value.trim()}`;
+        channel = pusher.subscribe(name);
+        channel.bind('pusher:subscription_succeeded', () => add(`subscribed to ${name}`));
+        channel.bind('notification.status', (data) => add(JSON.stringify(data), data.status));
+    });
+
+    function add(text, cls = '') {
+        const row = document.createElement('div');
+        row.className = `event ${cls}`;
+        row.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+        log.prepend(row);
+    }
+</script>
+</body>
+</html>

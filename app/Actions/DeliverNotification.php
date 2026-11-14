@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Actions;
 
 use App\Enums\NotificationStatus;
+use App\Events\NotificationStatusChanged;
 use App\Http\Middleware\AssignCorrelationId;
 use App\Models\Notification;
 use App\Models\NotificationAttempt;
@@ -133,6 +134,8 @@ final readonly class DeliverNotification
 
             $notification->update($changes);
         });
+
+        event(NotificationStatusChanged::from($notification));
 
         $this->metrics->recordAttempt(
             $notification->channel,

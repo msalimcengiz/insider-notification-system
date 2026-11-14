@@ -65,6 +65,18 @@ services:
       app:
         condition: service_healthy
 
+  # WebSocket server for real-time status updates.
+  reverb:
+    <<: *php
+    environment:
+      CONTAINER_ROLE: reverb
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+    ports:
+      - "${REVERB_EXTERNAL_PORT:-8080}:8080"
+    depends_on:
+      app:
+        condition: service_healthy
+
   # Stand-in for the external provider (see docker/mock-provider/server.mjs).
   # Set NOTIFICATION_PROVIDER_URL in .env to use webhook.site instead.
   mock-provider:

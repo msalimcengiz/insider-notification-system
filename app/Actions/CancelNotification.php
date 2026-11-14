@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Actions;
 
 use App\Enums\NotificationStatus;
+use App\Events\NotificationStatusChanged;
 use App\Exceptions\NotificationNotCancellable;
 use App\Models\Notification;
 
@@ -36,6 +37,10 @@ final readonly class CancelNotification
             ]);
 
         $fresh = $notification->refresh();
+
+        if ($cancelled > 0) {
+            event(NotificationStatusChanged::from($fresh));
+        }
 
         // Cancelling twice is not an error: the end state is what was asked for.
         if ($cancelled === 0 && $fresh->status !== NotificationStatus::Cancelled) {
