@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Enums\Channel;
 use App\Enums\NotificationStatus;
+use App\Jobs\Middleware\CheckCircuitBreaker;
 use App\Jobs\Middleware\ThrottleChannel;
 use App\Jobs\SendNotification;
 use App\Models\Notification;
@@ -45,11 +46,13 @@ it('runs through the queue end to end', function (): void {
     expect($notification->refresh()->status)->toBe(NotificationStatus::Sent);
 });
 
-it('is throttled per channel and never by the queue retry counter', function (): void {
+it('checks the circuit, then the rate limit, and never uses the queue retry counter', function (): void {
     $job = new SendNotification('id', Channel::Sms);
+    $middleware = $job->middleware();
 
-    expect($job->middleware())->toHaveCount(1)
-        ->and($job->middleware()[0])->toBeInstanceOf(ThrottleChannel::class)
+    expect($middleware)->toHaveCount(2)
+        ->and($middleware[0])->toBeInstanceOf(CheckCircuitBreaker::class)
+        ->and($middleware[1])->toBeInstanceOf(ThrottleChannel::class)
         ->and($job->tries)->toBe(0)
         ->and($job->retryUntil()->isFuture())->toBeTrue();
 });

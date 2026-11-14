@@ -7,6 +7,7 @@ namespace App\Actions;
 use App\Enums\NotificationStatus;
 use App\Models\Notification;
 use App\Models\NotificationAttempt;
+use App\Services\CircuitBreaker\CircuitBreaker;
 use App\Services\Delivery\DeliveryResult;
 use App\Services\Delivery\ProviderRegistry;
 use App\Services\Delivery\RetryPolicy;
@@ -21,6 +22,7 @@ final readonly class DeliverNotification
     public function __construct(
         private ProviderRegistry $providers,
         private RetryPolicy $retryPolicy,
+        private CircuitBreaker $circuitBreaker,
     ) {}
 
     /**
@@ -35,6 +37,13 @@ final readonly class DeliverNotification
         }
 
         $result = $this->providers->for($notification->channel)->send($notification);
+
+        // Only transient failures say something about the provider's health.
+        match (true) {
+            $result->succeeded() => $this->circuitBreaker->recordSuccess($notification->channel),
+            $result->isRetryable() => $this->circuitBreaker->recordFailure($notification->channel),
+            default => null,
+        };
 
         return $this->record($notification, $result);
     }
@@ -87,8 +96,8 @@ final readonly class DeliverNotification
                 'provider_message_id' => $result->providerMessageId,
                 'sent_at' => $now,
             ];
-        } elseif ($result->isRetryable() && $this->retryPolicy->shouldRetry($attempt)) {
-            $retryIn = $this->retryPolicy->delayFor($attempt, $result->retryAfter);
+        } elseif ($result->isRetryable() && $this->retryPolicy->shouldRetry($attemptsInBudget = $attempt - $notification->retry_budget_start)) {
+            $retryIn = $this->retryPolicy->delayFor($attemptsInBudget, $result->retryAfter);
             $changes += [
                 'status' => NotificationStatus::Retrying,
                 'next_attempt_at' => $now->addSeconds($retryIn),

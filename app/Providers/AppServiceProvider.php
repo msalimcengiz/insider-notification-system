@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Enums\Channel;
+use App\Services\CircuitBreaker\CircuitBreaker;
 use App\Services\Delivery\ChannelProvider;
 use App\Services\Delivery\ProviderRegistry;
 use App\Services\Delivery\ResponseClassifier;
@@ -12,6 +13,7 @@ use App\Services\Delivery\RetryPolicy;
 use App\Services\Delivery\WebhookChannelProvider;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Redis\Factory as Redis;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Support\Facades\Date;
@@ -22,6 +24,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(RetryPolicy::class, fn (): RetryPolicy => RetryPolicy::fromConfig());
+        $this->app->singleton(CircuitBreaker::class, fn (Application $app): CircuitBreaker => CircuitBreaker::fromConfig($app->make(Redis::class)));
 
         $this->app->singleton(ProviderRegistry::class, function (Application $app): ProviderRegistry {
             $factories = [];

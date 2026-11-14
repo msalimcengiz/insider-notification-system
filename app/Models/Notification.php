@@ -31,6 +31,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $idempotency_key
  * @property string|null $correlation_id
  * @property int $attempts
+ * @property int $retry_budget_start
  * @property string|null $provider_message_id
  * @property string|null $last_error
  * @property CarbonImmutable|null $scheduled_at
@@ -58,6 +59,7 @@ class Notification extends Model
         'priority' => 'normal',
         'status' => 'pending',
         'attempts' => 0,
+        'retry_budget_start' => 0,
     ];
 
     protected function casts(): array
@@ -69,6 +71,7 @@ class Notification extends Model
             'template_variables' => 'array',
             'batch_position' => 'integer',
             'attempts' => 'integer',
+            'retry_budget_start' => 'integer',
             'scheduled_at' => 'immutable_datetime',
             'queued_at' => 'immutable_datetime',
             'processing_started_at' => 'immutable_datetime',

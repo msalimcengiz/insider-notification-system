@@ -102,4 +102,45 @@ return [
         'jitter' => (float) env('NOTIFICATIONS_RETRY_JITTER', 0.2),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Circuit breaker
+    |--------------------------------------------------------------------------
+    |
+    | After `failure_threshold` consecutive transient failures on a channel
+    | (within `failure_window_seconds`) the channel's circuit opens for
+    | `cooldown_seconds`; then a single probe call decides whether it closes.
+    |
+    */
+
+    'circuit_breaker' => [
+        'failure_threshold' => (int) env('NOTIFICATIONS_CIRCUIT_FAILURE_THRESHOLD', 10),
+        'cooldown_seconds' => (int) env('NOTIFICATIONS_CIRCUIT_COOLDOWN_SECONDS', 30),
+        'failure_window_seconds' => (int) env('NOTIFICATIONS_CIRCUIT_FAILURE_WINDOW_SECONDS', 60),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Recovery sweeper
+    |--------------------------------------------------------------------------
+    |
+    | PostgreSQL is the source of truth. Every minute the sweeper re-dispatches
+    | notifications that should be moving but are not, e.g. because a worker
+    | died mid-delivery or Redis lost a job. Duplicate jobs are harmless: a job
+    | only proceeds if it can claim its notification.
+    |
+    */
+
+    'recovery' => [
+        // Persisted but never handed to the queue.
+        'pending_after_seconds' => (int) env('NOTIFICATIONS_RECOVER_PENDING_AFTER', 60),
+        // Waiting in a queue for much longer than any realistic backlog.
+        'queued_after_seconds' => (int) env('NOTIFICATIONS_RECOVER_QUEUED_AFTER', 900),
+        // Claimed by a worker that never reported back (job timeout is 30s).
+        'processing_after_seconds' => (int) env('NOTIFICATIONS_RECOVER_PROCESSING_AFTER', 300),
+        // Retry was due but its delayed job never ran.
+        'retrying_overdue_seconds' => (int) env('NOTIFICATIONS_RECOVER_RETRYING_OVERDUE', 300),
+        'max_per_run' => (int) env('NOTIFICATIONS_RECOVER_MAX_PER_RUN', 5000),
+    ],
+
 ];
