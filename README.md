@@ -99,6 +99,18 @@ By default deliveries go to the bundled mock provider, so the stack works offlin
 
 webhook.site's free tier limits the number of requests, so use the mock provider for load tests.
 
+**Verified against webhook.site.** With `NOTIFICATION_PROVIDER_URL` pointing to a webhook.site URL configured as above, a run covered:
+- an SMS with high priority
+- an email rendered from the `order-shipped-email` template
+- a 2-item batch (push + SMS)
+
+Results:
+- Every notification ended `sent` with the provider's `messageId`.
+- Each was accepted with `202` in ~220-240 ms per call.
+- webhook.site received exactly the documented body (`{"to", "channel", "content"}`) plus the `Idempotency-Key` and `X-Correlation-ID` headers.
+- Repeating the SMS request with the same `Idempotency-Key` returned `200` and caused no second provider call.
+- Before the response was configured, webhook.site answered `200` with HTML. The system classified that as *not accepted* ("Provider answered 200 without a messageId") and scheduled a retry instead of marking the notification as sent.
+
 ---
 
 ## API tour
